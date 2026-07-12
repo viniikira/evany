@@ -6,6 +6,7 @@ import { CompletionSummaryModal } from '../components/orders/CompletionSummaryMo
 import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
 import { OrderModal } from '../components/orders/OrderModal'
+import { OrderCreator } from '../components/orders/OrderCreator'
 import {
   listOrders, createOrder, updateOrder, deleteOrder, updateOrderStatus,
   addPayment, updatePayment, deletePayment,
@@ -36,6 +37,8 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
   const [loading, setLoading] = useState(initialData.length === 0)
   const [filter, setFilter] = useStickyFilter('orders.filter', 'all')
   const [modal, setModal] = useState(null)
+  // v13.48 — Criador visual (tela cheia) pra pedidos novos; edição fica no modal clássico
+  const [creator, setCreator] = useState(false)
   const [detail, setDetail] = useState(null)
   // #B Modal pós-conclusão: aparece quando pedido vira "Concluído"
   // mostrando resumo do que o sistema fez automaticamente
@@ -119,7 +122,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
       })
       if (validItems.length === 0) {
         toast.push('Adicione ao menos 1 item com quantidade maior que zero antes de salvar', { kind: 'error', duration: 6000 })
-        return
+        return false
       }
       
       // #3 — CONVERSÃO AUTOMÁTICA DE IDEIAS EM PRODUTOS (com dry-run de validação)
@@ -158,7 +161,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         if (errors.length > 0) {
           const msg = errors.map(e => `• ${e.idea?.name || 'Ideia'}: ${e.error}`).join('\n')
           toast.push(`Não foi possível salvar — ideias com problema:\n${msg}`, { kind: 'error', duration: 8000 })
-          return  // aborta sem tocar no banco
+          return false  // aborta sem tocar no banco
         }
         
         // ── EXECUÇÃO: validações passaram, executa as criações ──
@@ -325,7 +328,9 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
       setModal(null)
       await load(); onMutate?.()
       toast.push('Pedido salvo', { kind: 'success' })
-    } catch (e) { toastError(toast, e) }
+      // v13.48 — retorno de sucesso: OrderCreator só fecha quando true
+      return true
+    } catch (e) { toastError(toast, e); return false }
   }
 
   const remove = async (o) => {
@@ -770,7 +775,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
           onClear={() => clearStickyFilters('orders')}
         />
       </div>
-      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setModal('new')}>+ Novo Pedido</button>}
+      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator(true)}>+ Novo Pedido</button>}
     </div>
 
     {/* Banner informativo quando vendo lixeira */}
@@ -891,6 +896,20 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
       )
     })}</div>}
 
+    {creator && (
+      <OrderCreator
+        factories={factories}
+        products={products}
+        ideas={ideas}
+        colors={colors}
+        perm={perm}
+        rate={rate}
+        leadTimeByFactory={leadTimeByFactory}
+        onSave={save}
+        onClose={() => setCreator(false)}
+        onClassic={() => { setCreator(false); setModal('new') }}
+      />
+    )}
     {modal && (
       <OrderModal
         order={modal === 'new' ? null : modal}

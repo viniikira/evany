@@ -1,31 +1,40 @@
-# KIRA v13.47 — Planilha da Fábrica (Fase 1 do novo criador de pedidos)
+# KIRA v13.48 — Criador visual de pedidos (Fase 2 da "mesa de criação")
 
-## ✨ Nova feature: exportar a planilha da fábrica com um clique
+## ✨ Nova experiência: criar pedido virou visual e estratégico
 
-Botão **"📊 Planilha Fábrica"** no detalhe do pedido (ao lado do PDF, visível só pra admin — a planilha contém FOB). Gera um **Excel (.xlsx) com fotos embutidas**, no mesmo formato da planilha do Google Sheets que era montada à mão pra enviar à fábrica:
+O botão **"+ Novo Pedido"** agora abre um **criador em tela cheia**, em 3 etapas, no lugar do formulário apertado. (A edição de pedidos existentes continua no formulário clássico — que também segue acessível pelo botão "📝 Modo clássico" no topo do criador, pra quem preferir.)
 
-- **Bloco por modelo**: foto do produto (a foto congelada do pedido), código da fábrica + nome, cap (ex.: 13x4 HD), uma linha por cor com quantidade, "same as sample", FOB, TOTAL PRICE, **PP** (FOB × fator de conversão do pedido) e **BRL** (PP × câmbio orçado; fallback: câmbio atual do app).
-- **Total geral** de peças e dólares.
-- **Seção COLORS**: banner vermelho + foto real de cada cor usada (do banco de cores). Cor sem foto vira um quadrado sólido com o hex dela.
-- Cores com **preço próprio** aparecem com o preço certo (mesma regra do FOB do sistema).
-- Nome do arquivo: `FABRICA-nome-do-pedido.xlsx`.
+### Etapa 1 — Fábrica
+Cards grandes das fábricas, cada um mostrando quantos modelos tem cadastrados e o prazo médio. Nome do pedido opcional.
 
-**Detalhes técnicos**: `src/lib/factorySheet.js` (camada pura `buildFactorySheetData` + geração ExcelJS). ExcelJS entra por `import()` dinâmico — o bundle principal não cresce. Fotos são normalizadas pra JPEG via canvas (compatível com .xlsx, arquivo menor). O BRL parte do PP sem arredondar, igual à planilha original (18.50×1.65×5.75 = R$175,52).
+### Etapa 2 — Modelos e cores (a "mesa de criação")
+- **Galeria de modelos** à esquerda, com **foto grande** de cada um, agrupados por relevância: cadastrados na fábrica, em pesquisa, de outras fábricas e ideias (que viram produto ao salvar). Busca por nome/código.
+- Tocou num modelo, ele entra na mesa. Aí aparece a **galeria de cores** com a **foto real** de cada cor do banco — as cores já cadastradas no modelo vêm primeiro, marcadas com ⭐.
+- Tocou numa cor, nasce uma **combinação modelo+cor**: foto do modelo e foto da cor **lado a lado** (o "como fica a LARA em 99J?" na tela), com quantidade em botões grandes de −5/+5 e campo direto. Cor pode ter preço próprio.
+- **Totais ao vivo no rodapé**: peças, FOB em dólar e **≈ R$ no câmbio de hoje** (Wise), atualizando a cada toque.
+
+### Etapa 3 — Revisão
+Resumo tipo planilha (foto + cores + quantidades + preços), status inicial (Rascunho ou Em Revisão), previsão de chegada, data retroativa e prazo prometido. Salvar.
+
+## 🔗 Como se conecta ao que já existe
+
+O criador **não duplica regra de negócio**: ele monta o mesmo payload do formulário clássico e salva pela mesma função. Ou seja, tudo que já funcionava continua igual — conversão automática de ideia em produto (com dry-run de validação), snapshots de preço/nome/foto, inteligência de fábrica (produto sem fábrica adota a do pedido; de outra fábrica vira fornecedor secundário) e os logs. Depois de salvar, o pedido abre no detalhe de sempre, com o botão **"📊 Planilha Fábrica"** (v13.47) pronto pra exportar.
+
+**Detalhe honesto**: quanto mais cores tiverem foto cadastrada no banco de cores, mais rica a galeria fica. Cores sem foto aparecem como bolinha com a cor sólida (hex). Vale um mutirão de fotos das cores mais usadas.
 
 ## ✅ Verificações
 
-- 11 testes novos pra `buildFactorySheetData` (snapshots, preço por cor, PP/BRL com os valores da planilha real, dedupe de cores, fallbacks)
-- 185/186 testes passando (o 1 que falha é o pré-existente de fuso em `computeMonthlyTrend`, anotado pra rodada separada)
-- ESLint 0 erros, build OK
+- Fluxo completo testado no navegador (fábrica → modelos → cores → combinações → revisão → salvar); payload conferido e idêntico ao do formulário clássico
+- ESLint 0 erros, build OK, 185/186 testes (o 1 que falha é o pré-existente de fuso em `computeMonthlyTrend`, anotado)
+- `src/components/orders/OrderCreator.jsx` (novo); `Orders.jsx` passou a abrir o criador no "+ Novo Pedido" (edição segue no modal clássico)
 
-## 🗓️ Próxima fase (quando quiser)
+## 🗓️ Próximos passos possíveis (quando quiser)
 
-**Fase 2 — Criador visual de pedidos**: tela cheia em etapas (fábrica → modelos e cores → revisão), galeria de cores com foto real, combinações modelo+cor lado a lado, totais ao vivo em USD/BRL.
+- Mutirão de fotos no banco de cores (deixa a galeria muito melhor)
+- Botão de exportar planilha da fábrica direto da etapa de revisão (hoje é no detalhe do pedido, pós-salvar)
+- Duplicar/reaproveitar um pedido anterior como ponto de partida no criador
 
-## 📋 Registro da v13.46 (rodada anterior, já aplicada)
+## 📋 Registro das rodadas anteriores (já aplicadas)
 
-Correções aplicadas no código **e no Supabase de produção** em 12/07/2026:
-- Backup automático agora inclui `payments`, `color_variants` e `suppliers` (tabelas fantasmas removidas das listas)
-- Edge function `daily-backup` **deployada** (nunca tinha sido) e cron `kira-daily-backup` corrigido (rodava com placeholders `YOUR_PROJECT_REF` — nunca funcionou); testado de ponta a ponta: `auto/2026-07-12/dump.json` com 585 KB
-- `clean_old_logs` corrigida (mirava tabela inexistente) + trigger de imutabilidade permite só retenção >90d
-- CHECK de `orders.status` aceita `in_transit` (banco rejeitava o status da UI)
+- **v13.47** — Planilha da Fábrica: exporta Excel com fotos no formato enviado à fábrica (modelo/cores/FOB/PP/BRL + seção COLORS). Botão no detalhe do pedido (só admin).
+- **v13.46** — Correções aplicadas no código e no Supabase: backup passou a incluir `payments`/`color_variants`/`suppliers`; edge function `daily-backup` deployada e cron corrigido (rodava com placeholders, nunca funcionou); `clean_old_logs` corrigida; `orders.status` aceita `in_transit`.
