@@ -5,6 +5,7 @@ import { ColorSwatch } from '../components/ColorSwatch'
 import { ColorChip } from '../components/ColorChip'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { NameAutocomplete } from '../components/NameAutocomplete'
+import { proposeSku } from '../lib/creationAssist'
 import { FavoriteStar } from '../components/FavoriteStar'
 import { listProducts, createProduct, updateProduct, deleteProduct,
   bulkUpdateColorStatus, updateProductStatus,
@@ -691,6 +692,20 @@ function ProductModal({ product, collections, factories, colors, names, existing
     setF(prev => ({ ...prev, color_variants: (prev.color_variants || []).map(c => c.id === id ? { ...c, [key]: val } : c) }))
     setDirty(true)
   }
+  // v13.52 — Ao escolher a cor, auto-propõe o SKU pela convenção (só se ainda vazio).
+  // Preenche os SKUs naturalmente — é o que vincula produto↔Shopify (vendas/estoque).
+  const setCVCode = (id, code) => {
+    setF(prev => ({
+      ...prev,
+      color_variants: (prev.color_variants || []).map(c => {
+        if (c.id !== id) return c
+        const next = { ...c, code }
+        if (!c.sku && code && prev.name) next.sku = proposeSku(prev.name, code)
+        return next
+      }),
+    }))
+    setDirty(true)
+  }
   const rmCV = (id) => {
     setF(prev => ({ ...prev, color_variants: (prev.color_variants || []).filter(c => c.id !== id) }))
     setDirty(true)
@@ -829,20 +844,32 @@ function ProductModal({ product, collections, factories, colors, names, existing
                   {/* #20 Swatch unificado */}
                   <ColorSwatch color={colorData} code={cv.code} colors={colors} size="md" />
                   <div style={{ flex: 1, minWidth: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-                    <select className="field field-sm" style={{ fontSize: 11, padding: '3px 4px' }} value={cv.code} onChange={e => updCV(cv.id, 'code', e.target.value)}>
+                    <select className="field field-sm" style={{ fontSize: 11, padding: '3px 4px' }} value={cv.code} onChange={e => setCVCode(cv.id, e.target.value)}>
                       <option value="">Código</option>
                       {colors.map(c => <option key={c.id} value={c.code}>{c.code}{c.name_pt ? ` · ${c.name_pt}` : ''}</option>)}
                     </select>
                     <select className="field field-sm" style={{ fontSize: 11, padding: '3px 4px' }} value={cv.status} onChange={e => updCV(cv.id, 'status', e.target.value)}>
                       {MANUAL_CV_ST.map(s => <option key={s.id} value={s.id}>{s.icon} {s.label}</option>)}
                     </select>
-                    <input
-                      className="field field-sm"
-                      style={{ gridColumn: '1 / -1', fontSize: 11, padding: '3px 6px' }}
-                      placeholder="SKU (opcional)"
-                      value={cv.sku || ''}
-                      onChange={e => updCV(cv.id, 'sku', e.target.value)}
-                    />
+                    <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input
+                        className="field field-sm"
+                        style={{ flex: 1, fontSize: 11, padding: '3px 6px' }}
+                        placeholder="SKU (vincula com a Shopify)"
+                        value={cv.sku || ''}
+                        onChange={e => updCV(cv.id, 'sku', e.target.value)}
+                        title="SKU pra vincular a variante com a Shopify (vendas/estoque)"
+                      />
+                      {cv.code && f.name && !cv.sku && (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          style={{ padding: '2px 6px', fontSize: 10, whiteSpace: 'nowrap', flexShrink: 0 }}
+                          onClick={() => updCV(cv.id, 'sku', proposeSku(f.name, cv.code))}
+                          title={`Sugerir SKU pela convenção: ${proposeSku(f.name, cv.code)}`}
+                        >✨ {proposeSku(f.name, cv.code)}</button>
+                      )}
+                    </div>
                   </div>
                   <button className="btn-icon text-danger" style={{ flexShrink: 0, padding: 2 }} onClick={() => rmCV(cv.id)} title="Remover" aria-label="Remover cor">✕</button>
                 </div>

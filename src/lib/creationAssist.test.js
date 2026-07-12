@@ -2,7 +2,7 @@
 // v13.51 — Testa o assistente de criação.
 
 import { describe, it, expect } from 'vitest'
-import { freeNames, findNameConflict, specTemplateFrom, SPEC_FIELDS } from './creationAssist'
+import { freeNames, findNameConflict, specTemplateFrom, proposeSku, SPEC_FIELDS } from './creationAssist'
 
 const names = [
   { id: 1, name: 'Anna' }, { id: 2, name: 'Bianca' }, { id: 3, name: 'Carla' }, { id: 4, name: 'Duda' },
@@ -41,6 +41,24 @@ describe('findNameConflict', () => {
   it('nome livre não gera conflito', () => {
     expect(findNameConflict('Carla', products, ideas)).toBeNull()
     expect(findNameConflict('', products, ideas)).toBeNull()
+  })
+})
+
+describe('proposeSku', () => {
+  it('segue a convenção NOME+COR em maiúsculas (casos reais)', () => {
+    expect(proposeSku('Valentina', '2')).toBe('VALENTINA2')
+    expect(proposeSku('Valentina', '1B')).toBe('VALENTINA1B')
+  })
+
+  it('remove caracteres especiais do código e do nome', () => {
+    expect(proposeSku('Ana Beatriz', '613')).toBe('ANABEATRIZ613')
+    expect(proposeSku('Valentina', 'T1B/27')).toBe('VALENTINAT1B27')
+  })
+
+  it('retorna vazio se faltar nome ou código', () => {
+    expect(proposeSku('', '2')).toBe('')
+    expect(proposeSku('Lara', '')).toBe('')
+    expect(proposeSku(null, null)).toBe('')
   })
 })
 

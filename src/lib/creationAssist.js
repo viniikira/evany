@@ -41,6 +41,20 @@ export const SPEC_FIELDS = [
 ]
 
 /**
+ * Propõe um SKU pela convenção da Kira: NOME DO PRODUTO + CÓDIGO DA COR,
+ * tudo em maiúsculas e sem caracteres especiais (ex.: Valentina + 1B → VALENTINA1B).
+ * Serve pra vincular a variante com a Shopify sem digitar na mão.
+ * @returns {string} SKU proposto (vazio se faltar nome ou código)
+ */
+export function proposeSku(productName, colorCode) {
+  const slug = (s) => (s || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '')
+  const n = slug(productName)
+  const c = slug(colorCode)
+  if (!n || !c) return ''
+  return n + c
+}
+
+/**
  * Extrai a receita técnica de um produto/ideia (só campos preenchidos).
  * @returns {Object} patch pra aplicar no form
  */
