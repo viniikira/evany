@@ -902,6 +902,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         products={products}
         ideas={ideas}
         colors={colors}
+        orders={orders}
         perm={perm}
         rate={rate}
         leadTimeByFactory={leadTimeByFactory}

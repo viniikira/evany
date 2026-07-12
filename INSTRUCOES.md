@@ -1,40 +1,28 @@
-# KIRA v13.48 — Criador visual de pedidos (Fase 2 da "mesa de criação")
+# KIRA v13.49 — Criador de pedidos: reaproveitar e exportar
 
-## ✨ Nova experiência: criar pedido virou visual e estratégico
+Dois complementos ao criador visual (v13.48), fechando o fluxo que mostrei no mockup.
 
-O botão **"+ Novo Pedido"** agora abre um **criador em tela cheia**, em 3 etapas, no lugar do formulário apertado. (A edição de pedidos existentes continua no formulário clássico — que também segue acessível pelo botão "📝 Modo clássico" no topo do criador, pra quem preferir.)
+## ♻️ Reaproveitar um pedido anterior
 
-### Etapa 1 — Fábrica
-Cards grandes das fábricas, cada um mostrando quantos modelos tem cadastrados e o prazo médio. Nome do pedido opcional.
+Na primeira etapa do "+ Novo Pedido", abaixo das fábricas, aparece **"Ou reaproveite um pedido recente"** com seus últimos 6 pedidos. Clicar em um deles **copia todos os modelos, cores, quantidades e preços** pra um rascunho novo e já pula pra mesa de criação — aí é só ajustar quantidades e salvar. Feito pro reorder: reencomendar a mesma coisa da mesma fábrica vira 2 cliques.
 
-### Etapa 2 — Modelos e cores (a "mesa de criação")
-- **Galeria de modelos** à esquerda, com **foto grande** de cada um, agrupados por relevância: cadastrados na fábrica, em pesquisa, de outras fábricas e ideias (que viram produto ao salvar). Busca por nome/código.
-- Tocou num modelo, ele entra na mesa. Aí aparece a **galeria de cores** com a **foto real** de cada cor do banco — as cores já cadastradas no modelo vêm primeiro, marcadas com ⭐.
-- Tocou numa cor, nasce uma **combinação modelo+cor**: foto do modelo e foto da cor **lado a lado** (o "como fica a LARA em 99J?" na tela), com quantidade em botões grandes de −5/+5 e campo direto. Cor pode ter preço próprio.
-- **Totais ao vivo no rodapé**: peças, FOB em dólar e **≈ R$ no câmbio de hoje** (Wise), atualizando a cada toque.
+(Os preços próprios de cada cor são preservados. O pedido original não é tocado — é sempre um rascunho novo.)
 
-### Etapa 3 — Revisão
-Resumo tipo planilha (foto + cores + quantidades + preços), status inicial (Rascunho ou Em Revisão), previsão de chegada, data retroativa e prazo prometido. Salvar.
+## 📊 Exportar a planilha da fábrica direto da revisão
 
-## 🔗 Como se conecta ao que já existe
-
-O criador **não duplica regra de negócio**: ele monta o mesmo payload do formulário clássico e salva pela mesma função. Ou seja, tudo que já funcionava continua igual — conversão automática de ideia em produto (com dry-run de validação), snapshots de preço/nome/foto, inteligência de fábrica (produto sem fábrica adota a do pedido; de outra fábrica vira fornecedor secundário) e os logs. Depois de salvar, o pedido abre no detalhe de sempre, com o botão **"📊 Planilha Fábrica"** (v13.47) pronto pra exportar.
-
-**Detalhe honesto**: quanto mais cores tiverem foto cadastrada no banco de cores, mais rica a galeria fica. Cores sem foto aparecem como bolinha com a cor sólida (hex). Vale um mutirão de fotos das cores mais usadas.
+Na etapa de revisão, ao lado de "Salvar pedido", agora tem **"📊 Planilha da fábrica"** (só admin). Gera o mesmo Excel com fotos da v13.47, **antes mesmo de salvar** — útil pra conferir ou já mandar pro WeChat enquanto monta. Funciona tanto pra produtos quanto pra ideias (a ideia entra na planilha com nome/foto certos).
 
 ## ✅ Verificações
 
-- Fluxo completo testado no navegador (fábrica → modelos → cores → combinações → revisão → salvar); payload conferido e idêntico ao do formulário clássico
-- ESLint 0 erros, build OK, 185/186 testes (o 1 que falha é o pré-existente de fuso em `computeMonthlyTrend`, anotado)
-- `src/components/orders/OrderCreator.jsx` (novo); `Orders.jsx` passou a abrir o criador no "+ Novo Pedido" (edição segue no modal clássico)
+- Fluxo testado no navegador: reaproveitar pré-carregou o pedido certo (modelos, cores e preços próprios), e a exportação gerou o `.xlsx` válido sem erros
+- ESLint 0 erros, build OK, 185/186 testes (o 1 que falha é o pré-existente de fuso em `computeMonthlyTrend`)
 
-## 🗓️ Próximos passos possíveis (quando quiser)
+## 🎨 Sobre o mutirão de fotos do banco de cores
 
-- Mutirão de fotos no banco de cores (deixa a galeria muito melhor)
-- Botão de exportar planilha da fábrica direto da etapa de revisão (hoje é no detalhe do pedido, pós-salvar)
-- Duplicar/reaproveitar um pedido anterior como ponto de partida no criador
+Levantei o estado real: das **61 cores** cadastradas, **49 já têm foto** (80%). Das 12 sem foto, **só 4 são usadas em algum produto** — então a galeria do criador já está bem servida. As 4 que valem a pena fotografar (por serem usadas): **M6/30, P4/30, P1B/30 e GREY**. As outras 8 sem foto não estão em nenhum produto, então não aparecem na galeria de nenhum modelo.
 
-## 📋 Registro das rodadas anteriores (já aplicadas)
+## 📋 Rodadas anteriores (já em produção)
 
-- **v13.47** — Planilha da Fábrica: exporta Excel com fotos no formato enviado à fábrica (modelo/cores/FOB/PP/BRL + seção COLORS). Botão no detalhe do pedido (só admin).
-- **v13.46** — Correções aplicadas no código e no Supabase: backup passou a incluir `payments`/`color_variants`/`suppliers`; edge function `daily-backup` deployada e cron corrigido (rodava com placeholders, nunca funcionou); `clean_old_logs` corrigida; `orders.status` aceita `in_transit`.
+- **v13.48** — Criador visual de pedidos em tela cheia (fábrica → modelos e cores → revisão), galeria de modelos e cores com foto, combinações modelo+cor lado a lado, totais ao vivo.
+- **v13.47** — Planilha da Fábrica: exporta Excel com fotos no formato enviado à fábrica.
+- **v13.46** — Correções: backup passou a incluir pagamentos; backup noturno server-side ativado; retenção de logs e status "Em Trânsito" corrigidos.

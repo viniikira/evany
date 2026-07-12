@@ -14,15 +14,18 @@
 
 import { useState, useMemo } from 'react'
 import { ColorSwatch } from '../ColorSwatch'
-import { SaveButton, useConfirm } from '../ui'
-import { uid, UC } from '../../lib/utils'
+import { SaveButton, useConfirm, useToast } from '../ui'
+import { generateFactorySheet } from '../../lib/factorySheet'
+import { uid, UC, formatDate } from '../../lib/utils'
 
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
 
-export function OrderCreator({ factories, products, ideas = [], colors = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose, onClassic }) {
+export function OrderCreator({ factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose, onClassic }) {
   const confirm = useConfirm()
+  const toast = useToast()
   const [step, setStep] = useState(1)
+  const [exportingSheet, setExportingSheet] = useState(false)
   const [f, setF] = useState({
     order_name: '',
     factory: '',
@@ -36,6 +39,36 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], per
   const [modelSearch, setModelSearch] = useState('')
   const [colorSearch, setColorSearch] = useState('')
   const s = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  // ── Reaproveitar pedido anterior (reorder rápido) ──
+  // Copia itens/cores/preços de um pedido existente pra um rascunho novo.
+  // Central pro negócio: a Kira reencomenda os mesmos modelos/cores toda vez.
+  const reuseCandidates = useMemo(() => (
+    [...(orders || [])]
+      .filter(o => (o.items || []).length > 0)
+      .sort((a, b) => new Date(b.order_date || b.created_at) - new Date(a.order_date || a.created_at))
+      .slice(0, 6)
+  ), [orders])
+  const reuseOrder = (src) => {
+    setF(prev => ({
+      ...prev,
+      factory: src.factory || prev.factory,
+      items: (src.items || []).map(it => ({
+        id: 'tmp-' + uid(),
+        product_id: it.product_id || '',
+        idea_id: null,
+        idea_name_snapshot: null,
+        price_usd: it.price_usd_snapshot ?? it.price_usd ?? '',
+        colors: (it.colors || []).filter(c => c && c.code).map(c => ({
+          code: c.code,
+          qty: Number(c.qty) || 0,
+          price_usd: c.price_usd ?? null,
+          _fromProduct: true,
+        })),
+      })),
+    }))
+    setStep(2)
+  }
 
   // ── Agrupamento de modelos por fábrica (mesma regra do OrderModal) ──
   const modelGroups = useMemo(() => {
@@ -152,6 +185,38 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], per
     }
   }
 
+  // Exporta a planilha da fábrica a partir do rascunho (antes de salvar).
+  // Enriquece itens de ideia (que ainda não têm snapshot) com nome/código/foto
+  // pra planilha renderizar certo; produtos resolvem via lookup no factorySheet.
+  const buildDraftOrder = () => ({
+    ...f,
+    items: (f.items || []).map(it => {
+      const cleanColors = (it.colors || []).filter(c => c.code && Number(c.qty || 0) > 0)
+      if (it.idea_id) {
+        const info = modelInfo(it)
+        return { ...it, name_manual: info.name, code_manual: info.code || null, selected_photo_url: info.photo || null, colors: cleanColors }
+      }
+      return { ...it, colors: cleanColors }
+    }).filter(it => (it.colors || []).length > 0),
+  })
+  const exportDraftSheet = async () => {
+    if (exportingSheet) return
+    const draft = buildDraftOrder()
+    if (!draft.items.length) {
+      toast.push('Adicione ao menos 1 cor com quantidade antes de exportar', { kind: 'error', duration: 5000 })
+      return
+    }
+    setExportingSheet(true)
+    try {
+      await generateFactorySheet(draft, products, colors, { rate })
+      toast.push('Planilha da fábrica gerada', { kind: 'success' })
+    } catch (e) {
+      toast.push('Não foi possível gerar a planilha: ' + (e?.message || e), { kind: 'error', duration: 6000 })
+    } finally {
+      setExportingSheet(false)
+    }
+  }
+
   const handleClose = async () => {
     if ((f.items || []).length > 0) {
       const ok = await confirm({
@@ -252,6 +317,37 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], per
                 )
               })}
             </div>
+
+            {reuseCandidates.length > 0 && (
+              <div style={{ marginTop: 26 }}>
+                <label className="field-label">Ou reaproveite um pedido recente <span className="text-muted text-xs" style={{ fontWeight: 400 }}>— copia modelos, cores e quantidades pra um rascunho novo</span></label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                  {reuseCandidates.map(o => {
+                    const pcs = (o.items || []).reduce((a, it) => a + (it.colors || []).reduce((b, c) => b + Number(c.qty || 0), 0), 0)
+                    const nModels = (o.items || []).length
+                    return (
+                      <button
+                        key={o.id}
+                        onClick={() => reuseOrder(o)}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                          padding: '10px 14px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                          border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)',
+                        }}
+                      >
+                        <span style={{ minWidth: 0 }}>
+                          <strong style={{ fontSize: 14 }}>{o.order_name || o.factory}</strong>
+                          <span className="text-muted" style={{ fontSize: 12, marginLeft: 8 }}>
+                            🏭 {o.factory} · {nModels} modelo{nModels !== 1 ? 's' : ''} · {pcs} pç · {formatDate(o.order_date || o.created_at, 'full')}
+                          </span>
+                        </span>
+                        <span className="text-muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>↻ reaproveitar</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -577,6 +673,11 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], per
           {step < 3 && (
             <button className="btn btn-primary" disabled={!canAdvance} onClick={() => setStep(step + 1)}>
               {step === 1 ? 'Escolher modelos →' : 'Revisar pedido →'}
+            </button>
+          )}
+          {step === 3 && perm.prices && (
+            <button className="btn btn-outline" disabled={exportingSheet} onClick={exportDraftSheet} title="Gera o Excel com fotos no formato enviado à fábrica">
+              {exportingSheet ? '⏳ Gerando...' : '📊 Planilha da fábrica'}
             </button>
           )}
           {step === 3 && <SaveButton onSave={doSave}>Salvar pedido</SaveButton>}
