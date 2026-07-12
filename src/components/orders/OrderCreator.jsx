@@ -16,6 +16,7 @@ import { useState, useMemo } from 'react'
 import { ColorSwatch } from '../ColorSwatch'
 import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
+import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel } from '../../lib/orderIntelligence'
 import { uid, UC, formatDate } from '../../lib/utils'
 
 const DEFAULT_QTY = 10
@@ -116,6 +117,22 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
     ...prev, items: (prev.items || []).map(it => it.id === id ? { ...it, [key]: val } : it),
   }))
 
+  // ── Inteligência: índice por modelo, calculado 1x do histórico ──
+  // Preço (tendência/alerta), pedidos a caminho e cores que o modelo costuma levar.
+  const intelByProduct = useMemo(() => {
+    const ids = new Set()
+    for (const o of (orders || [])) for (const it of (o.items || [])) if (it.product_id) ids.add(it.product_id)
+    const m = new Map()
+    for (const id of ids) {
+      m.set(id, {
+        price: priceSignalForModel(id, orders),
+        inFlight: inFlightForModel(id, orders),
+        suggestedColors: suggestColorsForModel(id, orders),
+      })
+    }
+    return m
+  }, [orders])
+
   const toggleColor = (itemId, code, fromProduct) => {
     setF(prev => ({
       ...prev,
@@ -124,7 +141,9 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
         const cls = it.colors || []
         const idx = cls.findIndex(c => (c.code || '').toLowerCase() === code.toLowerCase())
         if (idx >= 0) return { ...it, colors: cls.filter((_, i) => i !== idx) }
-        return { ...it, colors: [...cls, { code, qty: DEFAULT_QTY, _fromProduct: fromProduct }] }
+        // Quantidade inicial = média histórica dessa combinação, se houver.
+        const sug = it.product_id ? suggestQuantity(it.product_id, code, orders) : null
+        return { ...it, colors: [...cls, { code, qty: sug?.avg || DEFAULT_QTY, _fromProduct: fromProduct }] }
       }),
     }))
   }
@@ -428,6 +447,7 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
 
               {(f.items || []).map(it => {
                 const info = modelInfo(it)
+                const intel = it.product_id ? intelByProduct.get(it.product_id) : null
                 const registered = new Set(info.registeredColors.map(c => c.toLowerCase()))
                 const selectedCodes = new Set((it.colors || []).map(c => (c.code || '').toLowerCase()))
                 const q = colorSearch.trim().toLowerCase()
@@ -462,6 +482,31 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                         <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
                           {itemQty} pç{itemQty !== 1 ? 's' : ''}{perm.prices && itemFob > 0 ? ` · FOB ${fmt$(itemFob)}` : ''}
                         </div>
+                        {/* Sinais do histórico: alerta de preço + pedido a caminho */}
+                        {intel && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
+                            {perm.prices && intel.price && intel.price.lastPrice != null && (
+                              <span
+                                className="chip"
+                                style={{ fontSize: 10, background: intel.price.hasIncreaseAlert ? '#FEE2E2' : '#EEF2F7', color: intel.price.hasIncreaseAlert ? '#991B1B' : '#475569' }}
+                                title={`Última FOB registrada: $${intel.price.lastPrice.toFixed(2)} · ${intel.price.count} pedido(s) no histórico`}
+                              >
+                                {intel.price.trend === 'up' ? '📈' : intel.price.trend === 'down' ? '📉' : '💲'} última FOB ${intel.price.lastPrice.toFixed(2)}
+                                {intel.price.hasIncreaseAlert && intel.price.lastIncreasePct != null ? ` · subiu ${Math.round(intel.price.lastIncreasePct)}%` : ''}
+                              </span>
+                            )}
+                            {(intel.inFlight || []).map(fl => (
+                              <span
+                                key={fl.orderId}
+                                className="chip"
+                                style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E' }}
+                                title={fl.colors.map(c => `${c.code} ×${c.qty}`).join(', ')}
+                              >
+                                ⏳ já vindo: {fl.orderName}{fl.expectedArrival ? ` · chega ${formatDate(fl.expectedArrival, 'full')}` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       {perm.prices && (
                         <div style={{ width: 110 }}>
@@ -480,6 +525,27 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                         </span>
                         <input className="field field-sm" placeholder="🔍 Buscar cor..." value={colorSearch} onChange={e => setColorSearch(e.target.value)} style={{ width: 160 }} />
                       </div>
+                      {/* Cores que este modelo costuma levar (do histórico) — 1 toque adiciona já com a quantidade média */}
+                      {(() => {
+                        const sugg = ((intel && intel.suggestedColors) || []).filter(sc => !selectedCodes.has((sc.code || '').toLowerCase()))
+                        if (sugg.length === 0) return null
+                        return (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+                            <span className="text-muted" style={{ fontSize: 11 }}>↻ Costuma pedir:</span>
+                            {sugg.slice(0, 6).map(sc => (
+                              <button
+                                key={sc.code}
+                                onClick={() => toggleColor(it.id, sc.code, registered.has((sc.code || '').toLowerCase()))}
+                                className="chip"
+                                style={{ cursor: 'pointer', fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+                                title={`Adicionar ${sc.code} — média ${sc.avgQty}un em ${sc.count} pedido(s)`}
+                              >
+                                + {sc.code} <span className="text-muted">~{sc.avgQty}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )
+                      })()}
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {gallery.map(c => {
                           const isSel = selectedCodes.has((c.code || '').toLowerCase())
@@ -521,6 +587,7 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                       const colorPrice = cl.price_usd != null && cl.price_usd !== '' ? parseFloat(cl.price_usd) : null
                       const effective = colorPrice != null ? colorPrice : pu
                       const lineTotal = Number(cl.qty || 0) * (effective || 0)
+                      const sug = it.product_id ? suggestQuantity(it.product_id, cl.code, orders) : null
                       return (
                         <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border-light, var(--border))' }}>
                           {/* Lado a lado: foto do modelo + foto da cor — o "como fica?" */}
@@ -537,6 +604,15 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                               {bankColor?.name_pt || ''}
                               {perm.prices && effective > 0 && <span>{bankColor?.name_pt ? ' · ' : ''}{fmt$(effective)}/un{colorPrice != null && colorPrice !== pu ? ' (preço próprio)' : ''}</span>}
                             </div>
+                            {sug && sug.avg !== Number(cl.qty || 0) && (
+                              <button
+                                onClick={() => updColor(it.id, idx, 'qty', sug.avg)}
+                                style={{ background: 'none', border: 'none', padding: 0, marginTop: 2, cursor: 'pointer', fontSize: 10, color: 'var(--primary)' }}
+                                title={`Média de ${sug.count} pedido(s) anteriores desta combinação`}
+                              >
+                                ↩ usar sugerido: {sug.avg}
+                              </button>
+                            )}
                           </div>
                           {perm.prices && (
                             <input
