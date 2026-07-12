@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, MH, MB, MF, Lightbox, useConfirm, useToast, SkeletonList, ClearFiltersButton } from '../components/ui'
 import { NameAutocomplete } from '../components/NameAutocomplete'
+import { freeNames, findNameConflict, specTemplateFrom } from '../lib/creationAssist'
 import { FavoriteStar } from '../components/FavoriteStar'
 import {
   listIdeas, createIdea, updateIdea, deleteIdea,
@@ -246,7 +247,26 @@ function IdeaModal({ idea, onSave, onDelete, onClose, onConvertToProduct, collec
   const [lb, setLb] = useState(null)
   const toast = useToast()
   const s = (k, v) => { setF(p => ({ ...p, [k]: v })); setDirty(true) }
-  
+
+  // v13.51 — Assistente de criação: nome livre, duplicata e "basear em".
+  const free = freeNames(names, existingProducts, existingIdeas)
+  const conflict = findNameConflict(f.name, existingProducts, existingIdeas, idea?.id)
+  const suggestFreeName = () => {
+    if (!free.length) return
+    s('name', free[Math.floor(Math.random() * free.length)].name)
+  }
+  const templateSources = [
+    ...(existingProducts || []).filter(p => p.id !== idea?.id),
+    ...(existingIdeas || []).filter(i => i.id !== idea?.id),
+  ]
+  const applyTemplate = (id) => {
+    const src = templateSources.find(x => x.id === id)
+    if (!src) return
+    setF(prev => ({ ...prev, ...specTemplateFrom(src) }))
+    setDirty(true)
+    toast.push(`Características copiadas de ${UC(src.name)}`, { kind: 'success', duration: 2500 })
+  }
+
   const uploadCardImage = async (file) => {
     setUploading(true)
     try {
@@ -329,9 +349,17 @@ function IdeaModal({ idea, onSave, onDelete, onClose, onConvertToProduct, collec
         </div>
         <div>
           <div className="form-group">
-            <label className="field-label">
-              Nome *
-              {(names || []).length > 0 && <span className="text-muted text-xs" style={{ marginLeft: 6, fontWeight: 400 }}>— sugestões do banco de nomes</span>}
+            <label className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>Nome *</span>
+              {free.length > 0 && (
+                <button
+                  type="button"
+                  onClick={suggestFreeName}
+                  className="btn btn-outline btn-sm"
+                  style={{ padding: '2px 8px', fontSize: 11 }}
+                  title={`${free.length} nome(s) livre(s) no banco`}
+                >🎲 Sugerir nome livre</button>
+              )}
             </label>
             <NameAutocomplete
               value={f.name}
@@ -344,6 +372,11 @@ function IdeaModal({ idea, onSave, onDelete, onClose, onConvertToProduct, collec
               autoFocus
               placeholder="Nome da ideia"
             />
+            {conflict && (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#991B1B', background: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: 6, padding: '6px 10px' }}>
+                ⚠️ Já existe {conflict.type === 'product' ? 'um produto' : 'uma ideia'} com o nome <strong>"{UC(conflict.name)}"</strong>. Escolha outro nome — nomes duplicados dão conflito.
+              </div>
+            )}
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="field-label">Status</label>
@@ -353,6 +386,32 @@ function IdeaModal({ idea, onSave, onDelete, onClose, onConvertToProduct, collec
           </div>
         </div>
       </div>
+
+      {/* v13.51 — Basear características técnicas em um modelo parecido (não copia nome/foto/cores) */}
+      {templateSources.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border-light)', borderRadius: 8 }}>
+          <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>✨ Basear specs em:</span>
+          <select
+            className="field field-sm"
+            style={{ flex: 1 }}
+            value=""
+            onChange={e => { applyTemplate(e.target.value); e.target.value = '' }}
+            title="Copia acabamento, material, fio, comprimento, coleção e fábrica de um modelo existente"
+          >
+            <option value="">escolher modelo parecido…</option>
+            {(existingProducts || []).filter(p => p.id !== idea?.id).length > 0 && (
+              <optgroup label="👑 Produtos">
+                {(existingProducts || []).filter(p => p.id !== idea?.id).map(p => <option key={p.id} value={p.id}>{UC(p.name)}</option>)}
+              </optgroup>
+            )}
+            {(existingIdeas || []).filter(i => i.id !== idea?.id).length > 0 && (
+              <optgroup label="💡 Ideias">
+                {(existingIdeas || []).filter(i => i.id !== idea?.id).map(i => <option key={i.id} value={i.id}>{UC(i.name)}</option>)}
+              </optgroup>
+            )}
+          </select>
+        </div>
+      )}
 
       {/* SEÇÃO 2: Ideias de Cor (SUBIU — fluxo comum ao criar ideia) */}
       <div className="form-group">
@@ -640,7 +699,7 @@ function IdeaModal({ idea, onSave, onDelete, onClose, onConvertToProduct, collec
     <MF>
       {onDelete && <button className="btn-icon text-danger" onClick={onDelete} aria-label="Excluir ideia" style={{ marginRight: 'auto' }}>🗑</button>}
       <button className="btn btn-outline" onClick={onClose}>Cancelar</button>
-      <button className="btn btn-primary" onClick={() => onSave(f)} disabled={!f.name || uploading}>
+      <button className="btn btn-primary" onClick={() => onSave(f)} disabled={!f.name || uploading || !!conflict} title={conflict ? 'Resolva o nome duplicado antes de salvar' : undefined}>
         {uploading ? 'Enviando...' : 'Salvar'}
       </button>
     </MF>
