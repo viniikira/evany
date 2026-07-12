@@ -908,7 +908,6 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         leadTimeByFactory={leadTimeByFactory}
         onSave={save}
         onClose={() => setCreator(false)}
-        onClassic={() => { setCreator(false); setModal('new') }}
       />
     )}
     {modal && (

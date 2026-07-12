@@ -180,7 +180,10 @@ export function ConfirmProvider({ children }) {
     <ConfirmContext.Provider value={confirm}>
       {children}
       {dialog && (
-        <Modal onClose={() => handle(false)} width={480} allowOutsideClose>
+        /* v13.53 — zIndex alto: confirmação deve aparecer SOBRE qualquer tela
+           (o OrderCreator em tela cheia usa 900; sem isso o diálogo abria atrás
+           e o botão de fechar parecia "não funcionar") */
+        <Modal onClose={() => handle(false)} width={480} allowOutsideClose zIndex={9500}>
           <div style={{ padding: 24 }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>
               {dialog.danger ? '⚠️' : '🤔'}

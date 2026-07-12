@@ -12,7 +12,7 @@
 // tudo continua em Orders.jsx). Usado só pra pedidos NOVOS; edição continua
 // no modal clássico.
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { ColorSwatch } from '../ColorSwatch'
 import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
@@ -22,7 +22,7 @@ import { uid, UC, formatDate } from '../../lib/utils'
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
 
-export function OrderCreator({ factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose, onClassic }) {
+export function OrderCreator({ factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose }) {
   const confirm = useConfirm()
   const toast = useToast()
   const [step, setStep] = useState(1)
@@ -38,7 +38,10 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
     items: [],
   })
   const [modelSearch, setModelSearch] = useState('')
-  const [colorSearch, setColorSearch] = useState('')
+  // v13.53 — UI da galeria de cores POR MODELO: busca própria e expandir/recolher.
+  // (antes a busca era compartilhada: digitar num card filtrava todos)
+  const [galleryUI, setGalleryUI] = useState({})
+  const setGallery = (itemId, patch) => setGalleryUI(prev => ({ ...prev, [itemId]: { ...(prev[itemId] || {}), ...patch } }))
   const s = (k, v) => setF(p => ({ ...p, [k]: v }))
 
   // ── Reaproveitar pedido anterior (reorder rápido) ──
@@ -107,7 +110,13 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
         product_id: isIdea ? '' : source.id,
         idea_id: isIdea ? source.id : null,
         idea_name_snapshot: isIdea ? source.name : null,
-        price_usd: source.price_usd ?? '',
+        // v13.53 — sem preço cadastrado? parte da última FOB do histórico
+        // (o sistema sabia o preço e deixava 0.00 — agora usa; segue editável)
+        price_usd: (source.price_usd != null && source.price_usd !== '')
+          ? source.price_usd
+          : (!isIdea && intelByProduct.get(source.id)?.price?.lastPrice != null
+              ? intelByProduct.get(source.id).price.lastPrice
+              : ''),
         colors: [],
       }],
     }))
@@ -254,6 +263,15 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
     if (ok) onClose()
   }
 
+  // v13.53 — ESC fecha o criador (com a mesma proteção de descarte do ✕)
+  const closeRef = useRef(handleClose)
+  closeRef.current = handleClose
+  useEffect(() => {
+    const onEsc = (e) => { if (e.key === 'Escape') closeRef.current() }
+    document.addEventListener('keydown', onEsc)
+    return () => document.removeEventListener('keydown', onEsc)
+  }, [])
+
   const canAdvance = step === 1 ? !!f.factory : (f.items || []).some(it => (it.colors || []).some(c => Number(c.qty || 0) > 0))
   const fmt$ = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const fmtR$ = (n) => 'R$ ' + Math.round(n).toLocaleString('pt-BR')
@@ -292,9 +310,6 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
           ))}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {onClassic && (
-            <button className="btn btn-outline btn-sm" onClick={onClassic} title="Abre o formulário clássico de pedido">📝 Modo clássico</button>
-          )}
           <button className="btn-icon" onClick={handleClose} aria-label="Fechar criador de pedido" style={{ fontSize: 18 }}>✕</button>
         </div>
       </div>
@@ -450,14 +465,26 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                 const intel = it.product_id ? intelByProduct.get(it.product_id) : null
                 const registered = new Set(info.registeredColors.map(c => c.toLowerCase()))
                 const selectedCodes = new Set((it.colors || []).map(c => (c.code || '').toLowerCase()))
-                const q = colorSearch.trim().toLowerCase()
+                const gUI = galleryUI[it.id] || {}
+                const q = (gUI.search || '').trim().toLowerCase()
                 const bank = (colors || []).filter(c =>
                   !q || (c.code || '').toLowerCase().includes(q) || (c.name_pt || '').toLowerCase().includes(q)
                 )
-                // Cores do modelo primeiro, depois o resto do banco
+                // v13.53 — galeria enxuta por padrão: cores do modelo + usuais + já
+                // selecionadas. As 60+ do banco só aparecem expandindo ou buscando.
+                const suggestedSet = new Set(((intel && intel.suggestedColors) || []).map(sc => (sc.code || '').toLowerCase()))
+                const inShortlist = (c) => {
+                  const k = (c.code || '').toLowerCase()
+                  return registered.has(k) || suggestedSet.has(k) || selectedCodes.has(k)
+                }
+                const shortlist = bank.filter(inShortlist)
+                const showAll = !!gUI.expanded || q.length > 0 || shortlist.length === 0
+                const galleryBase = showAll ? bank : shortlist
+                const hiddenCount = bank.length - shortlist.length
+                // Cores do modelo primeiro, depois o resto
                 const gallery = [
-                  ...bank.filter(c => registered.has((c.code || '').toLowerCase())),
-                  ...bank.filter(c => !registered.has((c.code || '').toLowerCase())),
+                  ...galleryBase.filter(c => registered.has((c.code || '').toLowerCase())),
+                  ...galleryBase.filter(c => !registered.has((c.code || '').toLowerCase())),
                 ]
                 const pu = parseFloat(it.price_usd) || 0
                 const itemQty = (it.colors || []).reduce((a, c) => a + Number(c.qty || 0), 0)
@@ -485,16 +512,27 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                         {/* Sinais do histórico: alerta de preço + pedido a caminho */}
                         {intel && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
-                            {perm.prices && intel.price && intel.price.lastPrice != null && (
-                              <span
-                                className="chip"
-                                style={{ fontSize: 10, background: intel.price.hasIncreaseAlert ? '#FEE2E2' : '#EEF2F7', color: intel.price.hasIncreaseAlert ? '#991B1B' : '#475569' }}
-                                title={`Última FOB registrada: $${intel.price.lastPrice.toFixed(2)} · ${intel.price.count} pedido(s) no histórico`}
-                              >
-                                {intel.price.trend === 'up' ? '📈' : intel.price.trend === 'down' ? '📉' : '💲'} última FOB ${intel.price.lastPrice.toFixed(2)}
-                                {intel.price.hasIncreaseAlert && intel.price.lastIncreasePct != null ? ` · subiu ${Math.round(intel.price.lastIncreasePct)}%` : ''}
-                              </span>
-                            )}
+                            {perm.prices && intel.price && intel.price.lastPrice != null && (() => {
+                              const canApply = pu === 0
+                              const Tag = canApply ? 'button' : 'span'
+                              return (
+                                <Tag
+                                  className="chip"
+                                  onClick={canApply ? () => updItem(it.id, 'price_usd', intel.price.lastPrice) : undefined}
+                                  style={{
+                                    fontSize: 10, border: 'none',
+                                    cursor: canApply ? 'pointer' : 'default',
+                                    background: intel.price.hasIncreaseAlert ? '#FEE2E2' : '#EEF2F7',
+                                    color: intel.price.hasIncreaseAlert ? '#991B1B' : '#475569',
+                                  }}
+                                  title={`Última FOB registrada: $${intel.price.lastPrice.toFixed(2)} · ${intel.price.count} pedido(s) no histórico${canApply ? ' — clique pra usar' : ''}`}
+                                >
+                                  {intel.price.trend === 'up' ? '📈' : intel.price.trend === 'down' ? '📉' : '💲'} última FOB ${intel.price.lastPrice.toFixed(2)}
+                                  {intel.price.hasIncreaseAlert && intel.price.lastIncreasePct != null ? ` · subiu ${Math.round(intel.price.lastIncreasePct)}%` : ''}
+                                  {canApply ? ' · usar' : ''}
+                                </Tag>
+                              )
+                            })()}
                             {(intel.inFlight || []).map(fl => (
                               <span
                                 key={fl.orderId}
@@ -523,7 +561,7 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                         <span className="text-muted" style={{ fontSize: 11 }}>
                           Toque numa cor pra adicionar {info.registeredColors.length > 0 ? '· ⭐ = cores do modelo' : ''}
                         </span>
-                        <input className="field field-sm" placeholder="🔍 Buscar cor..." value={colorSearch} onChange={e => setColorSearch(e.target.value)} style={{ width: 160 }} />
+                        <input className="field field-sm" placeholder="🔍 Buscar cor..." value={gUI.search || ''} onChange={e => setGallery(it.id, { search: e.target.value })} style={{ width: 160 }} />
                       </div>
                       {/* Cores que este modelo costuma levar (do histórico) — 1 toque adiciona já com a quantidade média */}
                       {(() => {
@@ -578,18 +616,50 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                           )
                         })}
                         {gallery.length === 0 && <span className="text-muted text-sm">Nenhuma cor encontrada no banco.</span>}
+                        {/* Expandir/recolher o resto do banco de cores */}
+                        {!q && shortlist.length > 0 && hiddenCount > 0 && (
+                          <button
+                            onClick={() => setGallery(it.id, { expanded: !gUI.expanded })}
+                            title={showAll ? 'Mostrar só as cores do modelo e as usuais' : `Mostrar as outras ${hiddenCount} cores do banco`}
+                            style={{
+                              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                              background: 'none', border: 'none', cursor: 'pointer', padding: 2, width: 62,
+                            }}
+                          >
+                            <div style={{
+                              width: 48, height: 48, borderRadius: '50%', margin: 2,
+                              border: '1px dashed var(--border-strong, var(--border))',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 13, fontWeight: 700, color: 'var(--text-muted, #6b7280)',
+                            }}>
+                              {showAll ? '−' : `+${hiddenCount}`}
+                            </div>
+                            <span style={{ fontSize: 10, color: 'var(--text-muted, #6b7280)' }}>{showAll ? 'menos' : 'todas'}</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
+                    {/* Cabeçalho das colunas — orienta o que é preço, quantidade e total */}
+                    {(it.colors || []).length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '5px 12px', fontSize: 10, textTransform: 'uppercase', letterSpacing: .5, color: 'var(--text-muted, #6b7280)', background: 'var(--bg)' }}>
+                        <div style={{ flex: 1 }}>Combinação</div>
+                        {perm.prices && <div style={{ width: 108, textAlign: 'center' }}>preço/un</div>}
+                        <div style={{ width: 118, textAlign: 'center' }}>quantidade</div>
+                        {perm.prices && <div style={{ width: 82, textAlign: 'right' }}>total</div>}
+                        <div style={{ width: 26 }} />
+                      </div>
+                    )}
                     {/* Combinações modelo+cor */}
                     {(it.colors || []).map((cl, idx) => {
                       const bankColor = (colors || []).find(c => (c.code || '').toLowerCase() === (cl.code || '').toLowerCase())
                       const colorPrice = cl.price_usd != null && cl.price_usd !== '' ? parseFloat(cl.price_usd) : null
                       const effective = colorPrice != null ? colorPrice : pu
+                      const hasCustom = colorPrice != null && colorPrice !== pu
                       const lineTotal = Number(cl.qty || 0) * (effective || 0)
                       const sug = it.product_id ? suggestQuantity(it.product_id, cl.code, orders) : null
                       return (
-                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border-light, var(--border))' }}>
+                        <div key={cl.code || idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', borderBottom: '1px solid var(--border-light, var(--border))' }}>
                           {/* Lado a lado: foto do modelo + foto da cor — o "como fica?" */}
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                             <div style={{ width: 34, height: 44, borderRadius: 6, overflow: 'hidden', background: 'var(--bg)' }}>
@@ -602,7 +672,7 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                             <div style={{ fontSize: 13, fontWeight: 600 }}>{UC(info.name)} · {cl.code}</div>
                             <div className="text-muted" style={{ fontSize: 11 }}>
                               {bankColor?.name_pt || ''}
-                              {perm.prices && effective > 0 && <span>{bankColor?.name_pt ? ' · ' : ''}{fmt$(effective)}/un{colorPrice != null && colorPrice !== pu ? ' (preço próprio)' : ''}</span>}
+                              {hasCustom && <span style={{ color: '#B45309' }}>{bankColor?.name_pt ? ' · ' : ''}preço próprio</span>}
                             </div>
                             {sug && sug.avg !== Number(cl.qty || 0) && (
                               <button
@@ -614,35 +684,65 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
                               </button>
                             )}
                           </div>
+                          {/* Preço com cara de dinheiro: $ …… /un (herda do modelo se vazio) */}
                           {perm.prices && (
-                            <input
-                              className="field field-sm"
-                              type="number" step="0.01"
-                              placeholder={pu > 0 ? fmt$(pu) : '$ próprio'}
-                              value={cl.price_usd ?? ''}
-                              onChange={e => updColor(it.id, idx, 'price_usd', e.target.value)}
-                              title="Preço próprio desta cor — deixe vazio pra herdar do modelo"
-                              style={{ width: 84, ...(colorPrice != null && colorPrice !== pu ? { background: '#FEF3C7', fontWeight: 600 } : {}) }}
-                            />
+                            <div
+                              title={hasCustom ? `Preço próprio desta cor (modelo é ${fmt$(pu)})` : 'Deixe vazio pra herdar o preço do modelo'}
+                              style={{
+                                display: 'flex', alignItems: 'center', width: 108, flexShrink: 0,
+                                border: `1px solid ${hasCustom ? '#F59E0B' : 'var(--border)'}`,
+                                borderRadius: 8, background: hasCustom ? '#FFFBEB' : 'var(--surface)',
+                                padding: '0 8px', height: 32,
+                              }}
+                            >
+                              <span style={{ fontSize: 12, color: 'var(--text-muted, #6b7280)' }}>$</span>
+                              <input
+                                type="number" step="0.01" min="0"
+                                placeholder={pu > 0 ? pu.toFixed(2) : '0.00'}
+                                value={cl.price_usd ?? ''}
+                                onChange={e => updColor(it.id, idx, 'price_usd', e.target.value)}
+                                aria-label={`Preço da cor ${cl.code} (vazio herda do modelo)`}
+                                style={{
+                                  width: '100%', border: 'none', outline: 'none', background: 'transparent',
+                                  fontSize: 13, fontWeight: hasCustom ? 700 : 400, textAlign: 'right',
+                                  color: 'var(--text)', padding: '0 3px',
+                                }}
+                              />
+                              <span style={{ fontSize: 10, color: 'var(--text-muted, #6b7280)', whiteSpace: 'nowrap' }}>/un</span>
+                            </div>
                           )}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <button className="btn btn-outline btn-sm" style={{ minWidth: 34, padding: '4px 8px' }} onClick={() => bumpQty(it.id, idx, -QTY_STEP)} aria-label={`Diminuir ${QTY_STEP} da cor ${cl.code}`}>−{QTY_STEP}</button>
+                          {/* Quantidade: stepper único [− | 25 | +] (passo de 5) */}
+                          <div style={{
+                            display: 'flex', alignItems: 'stretch', width: 118, flexShrink: 0, height: 32,
+                            border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: 'var(--surface)',
+                          }}>
+                            <button
+                              onClick={() => bumpQty(it.id, idx, -QTY_STEP)}
+                              aria-label={`Diminuir ${QTY_STEP} da cor ${cl.code}`}
+                              title={`−${QTY_STEP}`}
+                              style={{ width: 32, border: 'none', borderRight: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: 15, color: 'var(--text)' }}
+                            >−</button>
                             <input
-                              className="field field-sm"
                               type="number" min="0"
                               value={cl.qty ?? ''}
                               onChange={e => updColor(it.id, idx, 'qty', e.target.value)}
-                              style={{ width: 58, textAlign: 'center', fontWeight: 700 }}
                               aria-label={`Quantidade da cor ${cl.code}`}
+                              style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', textAlign: 'center', fontWeight: 700, fontSize: 14, background: 'transparent', color: 'var(--text)' }}
                             />
-                            <button className="btn btn-outline btn-sm" style={{ minWidth: 34, padding: '4px 8px' }} onClick={() => bumpQty(it.id, idx, QTY_STEP)} aria-label={`Aumentar ${QTY_STEP} na cor ${cl.code}`}>+{QTY_STEP}</button>
+                            <button
+                              onClick={() => bumpQty(it.id, idx, QTY_STEP)}
+                              aria-label={`Aumentar ${QTY_STEP} na cor ${cl.code}`}
+                              title={`+${QTY_STEP}`}
+                              style={{ width: 32, border: 'none', borderLeft: '1px solid var(--border)', background: 'var(--bg)', cursor: 'pointer', fontSize: 15, color: 'var(--text)' }}
+                            >+</button>
                           </div>
+                          {/* Total só quando existe (nada de "—" solto parecendo sinal de menos) */}
                           {perm.prices && (
-                            <div style={{ width: 76, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#F59E0B' }}>
-                              {lineTotal > 0 ? fmt$(lineTotal) : '—'}
+                            <div style={{ width: 82, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#F59E0B', flexShrink: 0 }}>
+                              {lineTotal > 0 ? '= ' + fmt$(lineTotal) : ''}
                             </div>
                           )}
-                          <button className="btn-icon text-danger" onClick={() => toggleColor(it.id, cl.code, false)} title="Remover combinação" aria-label={`Remover cor ${cl.code}`}>✕</button>
+                          <button className="btn-icon text-danger" style={{ width: 26, flexShrink: 0 }} onClick={() => toggleColor(it.id, cl.code, false)} title="Remover combinação" aria-label={`Remover cor ${cl.code}`}>✕</button>
                         </div>
                       )
                     })}
