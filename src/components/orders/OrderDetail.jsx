@@ -12,6 +12,7 @@ import { PayRow } from './PayRow'
 import { addPayment, updatePayment, deletePayment } from '../../lib/data/orders'
 import { uploadReceipt, getReceiptSignedUrl, deleteReceipt } from '../../lib/storage'
 import { generateOrderPDF } from '../../lib/pdf'
+import { generateFactorySheet } from '../../lib/factorySheet'
 import { trackAction } from '../../lib/analytics'
 import { addLog as writeLog } from '../../lib/data/misc'
 import { ORDER_ST } from '../../lib/constants'
@@ -56,6 +57,23 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
 
   // Adicionar pagamento (só admin)
   const [addingPay, setAddingPay] = useState(false)
+
+  // v13.47 — Exporta a planilha da fábrica (.xlsx com fotos, formato do Google Sheets manual)
+  const [exportingSheet, setExportingSheet] = useState(false)
+  const exportFactorySheet = async () => {
+    if (exportingSheet) return
+    setExportingSheet(true)
+    try {
+      trackAction('export_factory_sheet', { orderId: o.id, factory: o.factory })
+      const { models, colors: nColors } = await generateFactorySheet(o, products, colors, { rate })
+      toast.push(`Planilha da fábrica gerada: ${models} modelo${models !== 1 ? 's' : ''}, ${nColors} cor${nColors !== 1 ? 'es' : ''}.`, { kind: 'success' })
+    } catch (e) {
+      log.error('[KIRA] Erro ao gerar planilha da fábrica:', e)
+      toastError(toast, e, 'Não foi possível gerar a planilha')
+    } finally {
+      setExportingSheet(false)
+    }
+  }
 
   const addPay = async () => {
     try {
@@ -183,6 +201,15 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 onClick={onDuplicate}
                 title="Cria um novo pedido em rascunho com os mesmos items"
               >📋 Duplicar</button>
+            )}
+            {/* v13.47 Planilha da fábrica — contém FOB, só pra quem vê preços */}
+            {perm.prices && (
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={exportFactorySheet}
+                disabled={exportingSheet}
+                title="Gera o Excel com fotos no formato enviado à fábrica (modelos, cores, quantidades, FOB e seção COLORS)"
+              >{exportingSheet ? '⏳ Gerando...' : '📊 Planilha Fábrica'}</button>
             )}
             <button className="btn btn-outline btn-sm" onClick={() => { trackAction('export_pdf', { orderId: o.id, factory: o.factory }); generateOrderPDF(o, products) }}>📄 PDF</button>
             {perm.orders && !readOnly ? <button className="btn btn-primary btn-sm" onClick={onEdit}>✏️ Editar</button> : null}

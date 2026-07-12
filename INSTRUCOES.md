@@ -1,49 +1,31 @@
-# KIRA v13.46 — Correções cirúrgicas (backup, logs, status)
+# KIRA v13.47 — Planilha da Fábrica (Fase 1 do novo criador de pedidos)
 
-**Esta rodada não tem features novas.** São três correções de bugs latentes encontrados em auditoria completa do código + banco de produção.
+## ✨ Nova feature: exportar a planilha da fábrica com um clique
 
-## ⚠️ ORDEM DE APLICAÇÃO
+Botão **"📊 Planilha Fábrica"** no detalhe do pedido (ao lado do PDF, visível só pra admin — a planilha contém FOB). Gera um **Excel (.xlsx) com fotos embutidas**, no mesmo formato da planilha do Google Sheets que era montada à mão pra enviar à fábrica:
 
-1. **Primeiro o banco**: rodar `sql/22_correcoes_status_logs.sql` no SQL Editor do Supabase.
-2. **Depois o código**: push pro GitHub (Railway faz deploy sozinho).
+- **Bloco por modelo**: foto do produto (a foto congelada do pedido), código da fábrica + nome, cap (ex.: 13x4 HD), uma linha por cor com quantidade, "same as sample", FOB, TOTAL PRICE, **PP** (FOB × fator de conversão do pedido) e **BRL** (PP × câmbio orçado; fallback: câmbio atual do app).
+- **Total geral** de peças e dólares.
+- **Seção COLORS**: banner vermelho + foto real de cada cor usada (do banco de cores). Cor sem foto vira um quadrado sólido com o hex dela.
+- Cores com **preço próprio** aparecem com o preço certo (mesma regra do FOB do sistema).
+- Nome do arquivo: `FABRICA-nome-do-pedido.xlsx`.
 
-Se o código subir antes do SQL, nada quebra — mas a limpeza de logs continua sem funcionar e "Em Trânsito" continua sendo rejeitado até o SQL rodar.
+**Detalhes técnicos**: `src/lib/factorySheet.js` (camada pura `buildFactorySheetData` + geração ExcelJS). ExcelJS entra por `import()` dinâmico — o bundle principal não cresce. Fotos são normalizadas pra JPEG via canvas (compatível com .xlsx, arquivo menor). O BRL parte do PP sem arredondar, igual à planilha original (18.50×1.65×5.75 = R$175,52).
 
-## 🐛 1. Backup não incluía pagamentos (CRÍTICO)
+## ✅ Verificações
 
-O backup automático (client-side `src/lib/backup.js` e edge function `daily-backup`) listava tabelas que **nunca existiram** no schema relacional: `order_item_colors`, `order_payments`, `order_status_history` (resquício de um design antigo — cores e histórico de status são colunas JSONB; pagamentos ficam na tabela `payments`).
+- 11 testes novos pra `buildFactorySheetData` (snapshots, preço por cor, PP/BRL com os valores da planilha real, dedupe de cores, fallbacks)
+- 185/186 testes passando (o 1 que falha é o pré-existente de fuso em `computeMonthlyTrend`, anotado pra rodada separada)
+- ESLint 0 erros, build OK
 
-**Consequência real**: `payments` (todos os pagamentos e comprovantes), `color_variants` e `suppliers` estavam **fora de todos os backups automáticos**. O export manual da aba Backup sempre esteve correto.
+## 🗓️ Próxima fase (quando quiser)
 
-**Corrigido**: as duas listas agora usam as tabelas reais. A edge function ainda inclui `profiles`, `activity_logs` e `user_favorites` (roda com service role, dump completo).
+**Fase 2 — Criador visual de pedidos**: tela cheia em etapas (fábrica → modelos e cores → revisão), galeria de cores com foto real, combinações modelo+cor lado a lado, totais ao vivo em USD/BRL.
 
-**Descoberto na auditoria**: a edge function `daily-backup` **nunca foi deployada** no Supabase (só existe a `shopify-proxy`). O backup server-side nunca rodou — só o client-side. Deploy pendente de decisão.
+## 📋 Registro da v13.46 (rodada anterior, já aplicada)
 
-## 🐛 2. Limpeza de logs nunca funcionou
-
-`cleanOldLogs` (client) e `clean_old_logs` (SQL, `sql/08`) deletavam da tabela `logs` — que não existe. A tabela real é `activity_logs`. E mesmo com o nome certo, o delete seria barrado: RLS não tem policy de DELETE e o trigger de imutabilidade (`sql/17`) proíbe qualquer DELETE.
-
-**Corrigido** (em `sql/22`):
-- `clean_old_logs` agora mira `activity_logs`, roda como `SECURITY DEFINER` e tem **clamp de 90 dias** (impossível usar pra apagar logs recentes).
-- O trigger de imutabilidade ganhou uma única exceção: DELETE de logs com **mais de 90 dias** (retenção). UPDATE continua proibido sempre.
-- `src/lib/data/misc.js` chama a RPC em vez de delete direto (mesmo padrão do `purgeOldTrash`).
-
-A intenção original das duas features fica preservada: auditoria intocável dentro da janela de 90 dias, retenção funcionando fora dela.
-
-## 🐛 3. "Em Trânsito" era rejeitado pelo banco
-
-O CHECK de `orders.status` (`sql/01`) só permitia `draft/sent/manufacturing/completed`. A UI oferece `in_transit` desde a v13.x, mas o Postgres rejeitava a transição — confirmado em produção: **0 pedidos em trânsito** (nenhum conseguiu ser salvo).
-
-**Corrigido** (em `sql/22`): CHECK recriado incluindo `in_transit`.
-
-## ✅ Verificações aplicadas
-
-- ESLint 0 erros
-- Build compila
-- 174/175 testes passando — o 1 que falha (`computeMonthlyTrend > ordena cronologicamente`) é **pré-existente e não relacionado**: sensibilidade a fuso horário no próprio teste (datas UTC meia-noite recuam um mês em UTC-3). Anotado pra correção separada.
-
-## 📋 Pendências desta rodada
-
-- [ ] Rodar `sql/22_correcoes_status_logs.sql` no Supabase (produção)
-- [ ] Decidir deploy da edge function `daily-backup` + agendamento pg_cron (`sql/16` tem placeholders nunca preenchidos)
-- [ ] Corrigir teste de fuso em `financial.test.js` (rodada separada)
+Correções aplicadas no código **e no Supabase de produção** em 12/07/2026:
+- Backup automático agora inclui `payments`, `color_variants` e `suppliers` (tabelas fantasmas removidas das listas)
+- Edge function `daily-backup` **deployada** (nunca tinha sido) e cron `kira-daily-backup` corrigido (rodava com placeholders `YOUR_PROJECT_REF` — nunca funcionou); testado de ponta a ponta: `auto/2026-07-12/dump.json` com 585 KB
+- `clean_old_logs` corrigida (mirava tabela inexistente) + trigger de imutabilidade permite só retenção >90d
+- CHECK de `orders.status` aceita `in_transit` (banco rejeitava o status da UI)
