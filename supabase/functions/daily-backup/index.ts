@@ -17,11 +17,16 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// v13.46 — lista corrigida: 'order_item_colors', 'order_payments' e
+// 'order_status_history' nunca existiram no schema relacional (cores e
+// histórico de status são colunas JSONB; pagamentos ficam em 'payments').
+// Service role enxerga tudo, então aqui o dump é realmente completo.
 const TABLES = [
-  'products', 'orders', 'order_items', 'order_item_colors', 'order_payments',
+  'products', 'color_variants', 'suppliers',
+  'orders', 'order_items', 'payments',
   'ideas', 'colors', 'collections', 'factories', 'names',
   'color_categories', 'color_category_assignments',
-  'order_status_history',
+  'profiles', 'activity_logs', 'user_favorites',
 ]
 
 const RETENTION_DAYS = 30
@@ -77,7 +82,7 @@ serve(async (req) => {
     // 2) Salva no Storage
     const json = JSON.stringify({
       backup_at: startedAt,
-      version: 'v13.31',
+      version: 'v13.46',
       tables: dump,
     }, null, 2)
     

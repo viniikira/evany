@@ -13,14 +13,22 @@ import { log } from './logger'
 const BACKUP_BUCKET = 'backups'
 const RETENTION_DAYS = 30
 
+// v13.46 — lista corrigida: 'order_item_colors', 'order_payments' e
+// 'order_status_history' nunca existiram no schema relacional (cores e
+// histórico são colunas JSONB; pagamentos ficam na tabela 'payments').
+// Com os nomes fantasmas, payments/color_variants/suppliers ficavam FORA
+// do backup. RLS ainda se aplica: payments só entra quando um admin abre o app.
 const TABLES_TO_BACKUP = [
   'products',
+  'color_variants',
+  'suppliers',
   'orders',
   'order_items',
-  'order_item_colors',
-  'order_payments',
+  'payments',
   'ideas',
   'colors',
+  'color_categories',
+  'color_category_assignments',
   'collections',
   'factories',
   'names',
@@ -36,7 +44,7 @@ export async function runDailyBackup() {
   log.info(`[backup] Iniciando dump diário ${today}...`)
   
   const dump = { 
-    version: 'v13.14',
+    version: 'v13.46',
     created_at: new Date().toISOString(),
     tables: {},
   }

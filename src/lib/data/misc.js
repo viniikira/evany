@@ -363,27 +363,24 @@ export async function updateProfileRole(id, role) {
 // ═══════════════════════════════════════════════════════════════════
 // Retenção de logs: deleta registros com mais de N dias
 // Disparado uma vez por dia (via runOncePerDay no App.jsx)
+// v13.46 — via RPC clean_old_logs (sql/22). O delete direto anterior
+// mirava a tabela 'logs' (inexistente) e, mesmo com o nome certo,
+// seria barrado por RLS + trigger de imutabilidade. A RPC roda como
+// SECURITY DEFINER e só remove logs com mais de 90 dias.
 // ═══════════════════════════════════════════════════════════════════
 export async function cleanOldLogs(retentionDays = 90) {
-  const cutoff = new Date()
-  cutoff.setDate(cutoff.getDate() - retentionDays)
-  const cutoffISO = cutoff.toISOString()
-  
   try {
-    const { error, count } = await supabase
-      .from('logs')
-      .delete({ count: 'exact' })
-      .lt('created_at', cutoffISO)
-    
+    const { data, error } = await supabase.rpc('clean_old_logs', { retention_days: retentionDays })
+
     if (error) {
       log.warn('[logs-clean] erro:', error.message)
       return { success: false, error: error.message }
     }
-    
-    if (count && count > 0) {
-      log.info(`[logs-clean] ✓ ${count} logs antigos removidos (>${retentionDays}d)`)
+
+    if (data && data > 0) {
+      log.info(`[logs-clean] ✓ ${data} logs antigos removidos (>${retentionDays}d)`)
     }
-    return { success: true, removed: count || 0 }
+    return { success: true, removed: data || 0 }
   } catch (e) {
     log.warn('[logs-clean] exceção:', e)
     return { success: false, error: String(e) }

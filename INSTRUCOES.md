@@ -1,91 +1,49 @@
-# KIRA v13.45 — Saúde técnica
+# KIRA v13.46 — Correções cirúrgicas (backup, logs, status)
 
-**Esta rodada não tem features novas.** É manutenção de qualidade técnica baseada nos itens críticos e importantes do relatório de saúde.
+**Esta rodada não tem features novas.** São três correções de bugs latentes encontrados em auditoria completa do código + banco de produção.
 
-## ⚠️ ATENÇÃO antes de aplicar
+## ⚠️ ORDEM DE APLICAÇÃO
 
-Esta versão muda como o sistema lê suas credenciais. **Você precisa ter o arquivo `.env` na raiz do projeto, senão o sistema não inicia.** Ele já vem incluído no zip — basta não deletar.
+1. **Primeiro o banco**: rodar `sql/22_correcoes_status_logs.sql` no SQL Editor do Supabase.
+2. **Depois o código**: push pro GitHub (Railway faz deploy sozinho).
 
-Próximas versões NÃO incluirão `.env` (ele fica fora pra ser segredo). Da próxima vez você só substitui `src/`, mantendo seu `.env` existente.
+Se o código subir antes do SQL, nada quebra — mas a limpeza de logs continua sem funcionar e "Em Trânsito" continua sendo rejeitado até o SQL rodar.
 
-## 🔒 1. Segurança — chaves de ambiente
+## 🐛 1. Backup não incluía pagamentos (CRÍTICO)
 
-Antes a chave Supabase ficava hardcoded em `src/lib/supabase.js` e duplicada em `src/pages/Shopify.jsx`. Agora:
+O backup automático (client-side `src/lib/backup.js` e edge function `daily-backup`) listava tabelas que **nunca existiram** no schema relacional: `order_item_colors`, `order_payments`, `order_status_history` (resquício de um design antigo — cores e histórico de status são colunas JSONB; pagamentos ficam na tabela `payments`).
 
-- **Arquivo `.env`** na raiz com suas credenciais reais (já preenchido com seus valores atuais — não precisa mexer)
-- **Arquivo `.env.example`** com template (esse vai pro Git, é só placeholder)
-- **Arquivo `.gitignore`** garantindo que `.env` nunca seja comitado
-- `src/lib/supabase.js` lê de `import.meta.env.VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. Se faltar, lança erro claro logo no boot
-- `src/pages/Shopify.jsx` agora importa do módulo central — zero duplicação
+**Consequência real**: `payments` (todos os pagamentos e comprovantes), `color_variants` e `suppliers` estavam **fora de todos os backups automáticos**. O export manual da aba Backup sempre esteve correto.
 
-**Risco que isso elimina:** se algum dia compartilhar o código, fazer fork no GitHub, ou mostrar tela pra alguém, a chave não vai junto.
+**Corrigido**: as duas listas agora usam as tabelas reais. A edge function ainda inclui `profiles`, `activity_logs` e `user_favorites` (roda com service role, dump completo).
 
-## 📝 2. Logger centralizado
+**Descoberto na auditoria**: a edge function `daily-backup` **nunca foi deployada** no Supabase (só existe a `shopify-proxy`). O backup server-side nunca rodou — só o client-side. Deploy pendente de decisão.
 
-Criado `src/lib/logger.js` com 4 métodos:
-- `log.info(...)` — silencioso em produção, visível em dev
-- `log.debug(...)` — silencioso em produção
-- `log.warn(...)` — silencioso em produção
-- `log.error(...)` — **sempre visível**, inclusive em produção (precisamos ver erros críticos)
+## 🐛 2. Limpeza de logs nunca funcionou
 
-Substituí 40 chamadas de `console.log/warn/error` em 17 arquivos. Resultado: console do navegador limpo em produção, sem vazar dados em DevTools de quem inspeciona.
+`cleanOldLogs` (client) e `clean_old_logs` (SQL, `sql/08`) deletavam da tabela `logs` — que não existe. A tabela real é `activity_logs`. E mesmo com o nome certo, o delete seria barrado: RLS não tem policy de DELETE e o trigger de imutabilidade (`sql/17`) proíbe qualquer DELETE.
 
-Padrão pra usar daqui pra frente:
-```javascript
-import { log } from '../lib/logger'
-log.info('carregou produtos', { count: 42 })
-log.error('falha ao salvar', err)
-```
+**Corrigido** (em `sql/22`):
+- `clean_old_logs` agora mira `activity_logs`, roda como `SECURITY DEFINER` e tem **clamp de 90 dias** (impossível usar pra apagar logs recentes).
+- O trigger de imutabilidade ganhou uma única exceção: DELETE de logs com **mais de 90 dias** (retenção). UPDATE continua proibido sempre.
+- `src/lib/data/misc.js` chama a RPC em vez de delete direto (mesmo padrão do `purgeOldTrash`).
 
-## 🔧 3. Correções pontuais
+A intenção original das duas features fica preservada: auditoria intocável dentro da janela de 90 dias, retenção funcionando fora dela.
 
-**6 lugares com `key={index}` corrigidos** (anti-pattern do React):
-- `src/components/orders/CompletionSummaryModal.jsx` (2 ocorrências)
-- `src/components/ColorChip.jsx`
-- `src/pages/Analytics.jsx`
-- `src/pages/Colors.jsx`
-- `src/pages/Factories.jsx` (2 ocorrências)
+## 🐛 3. "Em Trânsito" era rejeitado pelo banco
 
-Agora as keys usam o id real do objeto. Resultado: animações e foco de input não se confundem ao reordenar/deletar itens.
+O CHECK de `orders.status` (`sql/01`) só permitia `draft/sent/manufacturing/completed`. A UI oferece `in_transit` desde a v13.x, mas o Postgres rejeitava a transição — confirmado em produção: **0 pedidos em trânsito** (nenhum conseguiu ser salvo).
 
-**18 botões com ícone-only ganharam `aria-label`:**
-- Botões de fechar modal, lightbox, drawers de pendências e atividades
-- Botões de remover (item, cor, contato, foto, fornecedor, produto, fábrica, coleção)
-- Botões de editar (coleção, fábrica)
-
-Agora leitor de tela diz "botão, fechar lightbox" em vez de "botão, x". Acessibilidade básica + ganho de SEO.
+**Corrigido** (em `sql/22`): CHECK recriado incluindo `in_transit`.
 
 ## ✅ Verificações aplicadas
 
 - ESLint 0 erros
-- Bundle compila (752.8kb)
-- **175/175 testes passando** (mesmo número da v13.44 — não quebrei nada)
-- Rules of hooks auditadas em todas as páginas
-- Zero `console.*` em produção (exceto `migrate.js` onde `log` é nome local não relacionado)
-- Zero botões ícone-only sem aria-label
+- Build compila
+- 174/175 testes passando — o 1 que falha (`computeMonthlyTrend > ordena cronologicamente`) é **pré-existente e não relacionado**: sensibilidade a fuso horário no próprio teste (datas UTC meia-noite recuam um mês em UTC-3). Anotado pra correção separada.
 
-## ⚠️ Passos pra aplicar
+## 📋 Pendências desta rodada
 
-1. **Substituir conteúdo:**
-   - `src/` (pasta inteira)
-   - `package.json` (versão bumpada pra 13.45.0)
-   - **`.env`** (arquivo novo na raiz — copie do zip)
-   - **`.env.example`** (arquivo novo na raiz — copie do zip)
-   - **`.gitignore`** (arquivo novo na raiz — copie do zip)
-2. Verificar que `.env` ficou na raiz do projeto, mesmo nível do `package.json`
-3. Rodar normalmente — o sistema vai ler as credenciais do `.env`
-
-Se aparecer erro **"VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não definidas"** ao iniciar, é porque o `.env` não foi copiado direito. Verifique localização e nome do arquivo.
-
-## 📋 O que NÃO foi feito (e por quê)
-
-Do relatório de saúde, deixei pra depois:
-
-- **Dividir arquivos gigantes** (Products.jsx 1393 linhas, etc): alto risco refatorar sem motivo de uso. Faço quando for editar a tela.
-- **Otimizar `.select('*')`**: não é problema com seu volume atual. Só vale otimizar se aparecer lentidão.
-- **Aria-labels em botões com texto** (~129 botões): texto interno já serve como label acessível pra leitor de tela. Não vale o trabalho mecânico.
-- **Mover hooks de `lib/hooks.js` pra `hooks/`**: organização cosmética. Faço quando tocar na próxima rodada que envolver hooks.
-
-## 🗓️ Próximas rodadas (quando quiser)
-
-Você cancelou a fila de features (Kanban, undo, etc). Quando quiser voltar com necessidade real validada no uso, é só me avisar. Sistema está saudável e estável pra rodar.
+- [ ] Rodar `sql/22_correcoes_status_logs.sql` no Supabase (produção)
+- [ ] Decidir deploy da edge function `daily-backup` + agendamento pg_cron (`sql/16` tem placeholders nunca preenchidos)
+- [ ] Corrigir teste de fuso em `financial.test.js` (rodada separada)
