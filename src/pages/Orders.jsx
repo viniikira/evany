@@ -5,7 +5,7 @@ import { LeadTimePromptModal } from '../components/orders/LeadTimePromptModal'
 import { CompletionSummaryModal } from '../components/orders/CompletionSummaryModal'
 import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
-import { OrderModal } from '../components/orders/OrderModal'
+// v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
 import { OrderCreator } from '../components/orders/OrderCreator'
 import {
   listOrders, createOrder, updateOrder, deleteOrder, updateOrderStatus,
@@ -36,9 +36,10 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
   const [colors, setColors] = useState([])
   const [loading, setLoading] = useState(initialData.length === 0)
   const [filter, setFilter] = useStickyFilter('orders.filter', 'all')
-  const [modal, setModal] = useState(null)
-  // v13.48 — Criador visual (tela cheia) pra pedidos novos; edição fica no modal clássico
-  const [creator, setCreator] = useState(false)
+  // v13.54 — Criador visual (tela cheia) pra pedidos novos E edição:
+  // null fechado · 'new' pedido novo · objeto = pedido sendo editado.
+  // O OrderModal clássico saiu de cena.
+  const [creator, setCreator] = useState(null)
   const [detail, setDetail] = useState(null)
   // #B Modal pós-conclusão: aparece quando pedido vira "Concluído"
   // mostrando resumo do que o sistema fez automaticamente
@@ -325,7 +326,6 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         }
       }
       
-      setModal(null)
       await load(); onMutate?.()
       toast.push('Pedido salvo', { kind: 'success' })
       // v13.48 — retorno de sucesso: OrderCreator só fecha quando true
@@ -775,7 +775,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
           onClear={() => clearStickyFilters('orders')}
         />
       </div>
-      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator(true)}>+ Novo Pedido</button>}
+      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator('new')}>+ Novo Pedido</button>}
     </div>
 
     {/* Banner informativo quando vendo lixeira */}
@@ -898,6 +898,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
 
     {creator && (
       <OrderCreator
+        order={creator === 'new' ? null : creator}
         factories={factories}
         products={products}
         ideas={ideas}
@@ -907,20 +908,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         rate={rate}
         leadTimeByFactory={leadTimeByFactory}
         onSave={save}
-        onClose={() => setCreator(false)}
-      />
-    )}
-    {modal && (
-      <OrderModal
-        order={modal === 'new' ? null : modal}
-        factories={factories}
-        products={products}
-        ideas={ideas}
-        colors={colors}
-        perm={perm}
-        leadTimeByFactory={leadTimeByFactory}
-        onSave={save}
-        onClose={() => setModal(null)}
+        onClose={() => setCreator(null)}
       />
     )}
     {detail && (
@@ -932,7 +920,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         rate={rate}
         user={user}
         onClose={() => setDetail(null)}
-        onEdit={() => { setModal(detail); setDetail(null) }}
+        onEdit={() => { setCreator(detail); setDetail(null) }}
         onDelete={() => remove(detail)}
         onStatus={s => changeStatus(detail, s)}
         onRefresh={load}

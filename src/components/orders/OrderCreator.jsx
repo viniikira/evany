@@ -9,33 +9,66 @@
 //
 // Produz EXATAMENTE o mesmo payload do OrderModal clássico e salva pelo
 // mesmo onSave (conversão de ideias, snapshots, inteligência de fábrica —
-// tudo continua em Orders.jsx). Usado só pra pedidos NOVOS; edição continua
-// no modal clássico.
+// tudo continua em Orders.jsx).
+// v13.54 — também EDITA pedidos existentes (prop `order`): inicializa a mesa
+// com os itens reais e abre direto na etapa 2. O modal clássico saiu de cena.
 
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { ColorSwatch } from '../ColorSwatch'
 import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
 import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel } from '../../lib/orderIntelligence'
+import { ORDER_ST } from '../../lib/constants'
 import { uid, UC, formatDate } from '../../lib/utils'
 
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
 
-export function OrderCreator({ factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose }) {
+export function OrderCreator({ order = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose }) {
   const confirm = useConfirm()
   const toast = useToast()
-  const [step, setStep] = useState(1)
+  const isEdit = !!(order && order.id)
+  // Editando, a fábrica já existe — abre direto na mesa de criação
+  const [step, setStep] = useState(isEdit ? 2 : 1)
   const [exportingSheet, setExportingSheet] = useState(false)
-  const [f, setF] = useState({
-    order_name: '',
-    factory: '',
-    status: 'draft',
-    notes: '',
-    expected_arrival: null,
-    order_date: null,
-    promised_lead_days: null,
-    items: [],
+  const [f, setF] = useState(() => {
+    if (!isEdit) {
+      return {
+        order_name: '',
+        factory: '',
+        status: 'draft',
+        notes: '',
+        expected_arrival: null,
+        order_date: null,
+        promised_lead_days: null,
+        items: [],
+      }
+    }
+    // Edição: parte do pedido real. O spread preserva campos que o form não
+    // mostra (id, pagamentos, histórico, câmbio orçado...) — mesmo contrato
+    // do OrderModal antigo. Cores cadastradas no produto ganham _fromProduct.
+    const items = (order.items || []).map(it => {
+      const prod = (products || []).find(p => p.id === it.product_id)
+      const productColorCodes = new Set((prod?.color_variants || []).map(cv => (cv.code || '').toLowerCase()))
+      return {
+        ...it,
+        colors: (it.colors || []).map(c => ({
+          ...c,
+          _fromProduct: productColorCodes.has((c.code || '').toLowerCase()),
+        })),
+      }
+    })
+    return {
+      ...order,
+      order_name: order.order_name || '',
+      factory: order.factory || '',
+      status: order.status || 'draft',
+      notes: order.notes || '',
+      expected_arrival: order.expected_arrival || null,
+      order_date: order.order_date || null,
+      promised_lead_days: order.promised_lead_days || null,
+      items,
+    }
   })
   const [modelSearch, setModelSearch] = useState('')
   // v13.53 — UI da galeria de cores POR MODELO: busca própria e expandir/recolher.
@@ -135,12 +168,13 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
     for (const id of ids) {
       m.set(id, {
         price: priceSignalForModel(id, orders),
-        inFlight: inFlightForModel(id, orders),
+        // Editando, o próprio pedido não conta como "já vindo"
+        inFlight: inFlightForModel(id, orders, { excludeOrderId: order?.id }),
         suggestedColors: suggestColorsForModel(id, orders),
       })
     }
     return m
-  }, [orders])
+  }, [orders, order?.id])
 
   const toggleColor = (itemId, code, fromProduct) => {
     setF(prev => ({
@@ -204,10 +238,12 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
       }
     }
     const prod = (products || []).find(p => p.id === it.product_id)
+    // Fallback pros snapshots do item: pedidos antigos podem ter itens cujo
+    // produto foi deletado/convertido (product_id nulo) ou itens manuais.
     return {
-      name: prod?.name || '?',
-      code: prod?.factory_code || '',
-      photo: prod?.card_image_url || (prod?.photos || [])[0] || null,
+      name: it.name_manual || prod?.name || it.product_name_snapshot || '?',
+      code: it.code_manual || prod?.factory_code || it.product_code_snapshot || '',
+      photo: prod?.card_image_url || (prod?.photos || [])[0] || it.selected_photo_url || null,
       registeredColors: (prod?.color_variants || []).map(cv => cv.code).filter(Boolean),
       isIdea: false,
     }
@@ -248,10 +284,12 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
   const handleClose = async () => {
     if ((f.items || []).length > 0) {
       const ok = await confirm({
-        title: 'Descartar pedido?',
-        message: 'As combinações montadas serão perdidas.',
+        title: isEdit ? 'Sair sem salvar?' : 'Descartar pedido?',
+        message: isEdit
+          ? 'Alterações não salvas serão perdidas. O pedido continua como estava.'
+          : 'As combinações montadas serão perdidas.',
         danger: true,
-        confirmLabel: 'Descartar',
+        confirmLabel: isEdit ? 'Sair sem salvar' : 'Descartar',
       })
       if (!ok) return
     }
@@ -287,8 +325,14 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
         padding: '12px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <span style={{ fontSize: 17, fontWeight: 700 }}>🎨 Novo pedido</span>
+          <span style={{ fontSize: 17, fontWeight: 700 }}>
+            {isEdit ? `✏️ ${f.order_name || 'Editar pedido'}` : '🎨 Novo pedido'}
+          </span>
           {f.factory && <span className="chip" style={{ background: 'var(--primary)', color: '#fff' }}>🏭 {f.factory}</span>}
+          {isEdit && (() => {
+            const st = ORDER_ST.find(x => x.id === f.status)
+            return st ? <span className="chip" style={{ background: st.color + '22', color: st.color }}>{st.icon} {st.label}</span> : null
+          })()}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           {[
@@ -352,7 +396,7 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
               })}
             </div>
 
-            {reuseCandidates.length > 0 && (
+            {!isEdit && reuseCandidates.length > 0 && (
               <div style={{ marginTop: 26 }}>
                 <label className="field-label">Ou reaproveite um pedido recente <span className="text-muted text-xs" style={{ fontWeight: 400 }}>— copia modelos, cores e quantidades pra um rascunho novo</span></label>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
@@ -758,10 +802,14 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
             <div className="form-row">
               <div className="form-group">
-                <label className="field-label">Status inicial</label>
+                <label className="field-label">{isEdit ? 'Status' : 'Status inicial'}</label>
                 <select className="field" value={f.status} onChange={e => s('status', e.target.value)}>
-                  <option value="draft">📝 Rascunho</option>
-                  <option value="sent">📨 Em Revisão</option>
+                  {isEdit
+                    ? ORDER_ST.map(x => <option key={x.id} value={x.id}>{x.icon} {x.label}</option>)
+                    : (<>
+                        <option value="draft">📝 Rascunho</option>
+                        <option value="sent">📨 Em Revisão</option>
+                      </>)}
                 </select>
               </div>
               <div className="form-group">
@@ -856,7 +904,7 @@ export function OrderCreator({ factories, products, ideas = [], colors = [], ord
               {exportingSheet ? '⏳ Gerando...' : '📊 Planilha da fábrica'}
             </button>
           )}
-          {step === 3 && <SaveButton onSave={doSave}>Salvar pedido</SaveButton>}
+          {step === 3 && <SaveButton onSave={doSave}>{isEdit ? 'Salvar alterações' : 'Salvar pedido'}</SaveButton>}
         </div>
       </div>
     </div>
