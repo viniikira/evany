@@ -1,28 +1,27 @@
-# KIRA v13.56 — Deep-links: pedido e produto com URL própria
+# KIRA v13.57 — SKU integrado com a Shopify (sugere o real, valida o digitado)
 
-## 🔗 O que mudou
+## 🛒 O que mudou
 
-Fase 2 das URLs (v13.55 deu endereço às telas; agora os **itens** também têm):
+O ✨ da v13.52 sugeria o SKU **pela convenção** (`DEUSA2`) — mas algumas linhas da loja usam outro código (Afro Puff = `CHEREY6`). Agora, no modal de Produto, cada variante de cor conversa com o **catálogo real da Shopify** (o cache da última sincronização):
 
-- **Abrir o detalhe de um pedido** muda a URL pra `#/pedidos/novembro-2025` — dá pra favoritar, mandar no WhatsApp, apertar F5 e voltar exatamente naquele pedido.
-- **Produtos idem**: `#/produtos/lara` abre o detalhe da LARA direto.
-- **Formatos aceitos** no link: o nome (slug: minúsculas, sem acento, hífens), o id completo, ou um prefixo do id (≥8 caracteres). Se dois pedidos tiverem o mesmo nome, a URL usa o prefixo do id pra não ter ambiguidade.
-- **Fechar o detalhe** volta a URL pra `#/pedidos` / `#/produtos`. Link quebrado (item apagado) cai na lista, sem erro.
-- **Busca global (Ctrl+K)** agora abre o **produto** direto no detalhe (antes só navegava pra tela; pedidos já faziam isso).
-- Deep-link **sobrevive ao login**: quem abre `#/pedidos/novembro-2025` deslogado, loga e cai direto no pedido.
+1. **Variante sem SKU** → além do ✨ da convenção, aparecem chips **"🛒 na Shopify:"** com os SKUs **reais** de produtos da loja cujo título casa com o nome — ranqueados pela cor (o `CHEREY1B` aparece primeiro pra cor 1B). Um clique preenche.
+2. **SKU preenchido e correto** → linha verde **"🛒 vinculado: [título da loja] · N un"** — você vê na hora o produto da Shopify e o estoque atual.
+3. **SKU preenchido mas inexistente na loja** → aviso âmbar **"⚠️ SKU não encontrado na Shopify"** — pega erro de digitação antes de virar vínculo morto.
+
+É a ponte que faltava pro caso "a convenção não bate": em vez de adivinhar, o sistema **mostra o que existe na loja** e você escolhe. Cada vínculo certo alimenta a reposição por vendas.
+
+Nota: as sugestões vêm do **cache** da Shopify (última sincronização). Sincronizar na aba Shopify deixa tudo fresco — e com a paginação corrigida (v13.53), o sync agora pega a loja inteira.
 
 ## 🔧 Técnica
 
-- `router.js`: `entitySegmentForHash`, `hashForEntity`, `slugifyName`, `matchesEntity` (4 testes novos; 12 no router).
-- Reutiliza o mecanismo `initialDetailId`/`onDetailOpened` que a Visão Financeira já usava pra abrir pedido — agora com matching por nome/prefixo e espelhado em Produtos.
-- O sync página→URL preserva o segmento do item no carregamento (senão o deep-link seria apagado antes de o dado carregar).
+- `creationAssist.js`: `buildShopifyIndex` (achata o cache), `suggestShopifyLinks` (match por nome normalizado + ranking por cor), `findShopifyBySku` (validação case-insensitive). 6 testes novos (19 no arquivo).
+- `ProductModal` recebe `shopifyCache` (já disponível na página); índice memoizado.
 
 ## ✅ Verificações
 
-- App real: `#/pedidos/novembro-2025` sobrevive ao carregamento (não é normalizado pra `#/pedidos`), troca pra `#/produtos/lara` aceita, tela de login intacta, zero erros de console
-- ESLint 0 erros, build OK, 222/223 testes (o 1 é o pré-existente de fuso)
+- Testado no navegador com os 3 estados: sugestões reais rankeadas (CHEREY1B primeiro pra cor 1B), aviso pra SKU errado, vinculado com título+estoque; clique na sugestão preenche e vira "vinculado"
+- ESLint 0 erros, build OK, 228/229 testes (o 1 é o pré-existente de fuso)
 
-## 📋 Pendências do usuário (seguem valendo)
+## 🔒 Segurança (status em 13/07/2026)
 
-- Revogar o **token antigo da Shopify** (o novo, via secret, já está em uso)
-- Ativar **proteção contra senha vazada** no Supabase (Authentication → Policies)
+Diagnóstico do Supabase re-rodado: **0 erros**. Restam só avisos deixados de propósito (funções-base da RLS, políticas de categorias de cor que a equipe gerencia, listagem do bucket público de fotos, pg_net onde o cron precisa). Pendências do usuário: revogar o **token antigo da Shopify** e ativar **proteção contra senha vazada** (Authentication → Policies).

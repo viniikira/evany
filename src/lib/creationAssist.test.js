@@ -2,7 +2,18 @@
 // v13.51 — Testa o assistente de criação.
 
 import { describe, it, expect } from 'vitest'
-import { freeNames, findNameConflict, specTemplateFrom, proposeSku, SPEC_FIELDS } from './creationAssist'
+import { freeNames, findNameConflict, specTemplateFrom, proposeSku, SPEC_FIELDS, buildShopifyIndex, suggestShopifyLinks, findShopifyBySku } from './creationAssist'
+
+// Cache fake da Shopify (formato real: products[].variants[])
+const shopCache = {
+  products: [
+    { title: 'Afro Puff Preto Cacheado 1B', variants: [{ sku: 'CHEREY1B', inventory_quantity: 5 }] },
+    { title: 'Afro Puff Castanho Cacheado', variants: [{ sku: 'CHEREY6', inventory_quantity: 3 }] },
+    { title: 'Peruca Deusa Ondulada Cor 2', variants: [{ sku: 'DEUSA2', inventory_quantity: 8 }] },
+    { title: 'Cola Ghost Bond', variants: [{ sku: 'GHOSTBOND', inventory_quantity: 12 }] },
+    { title: 'Sem SKU', variants: [{ sku: '', inventory_quantity: 1 }] },
+  ],
+}
 
 const names = [
   { id: 1, name: 'Anna' }, { id: 2, name: 'Bianca' }, { id: 3, name: 'Carla' }, { id: 4, name: 'Duda' },
@@ -59,6 +70,42 @@ describe('proposeSku', () => {
     expect(proposeSku('', '2')).toBe('')
     expect(proposeSku('Lara', '')).toBe('')
     expect(proposeSku(null, null)).toBe('')
+  })
+})
+
+describe('vínculo com a Shopify', () => {
+  const index = buildShopifyIndex(shopCache)
+
+  it('achata o cache ignorando variantes sem SKU', () => {
+    expect(index).toHaveLength(4)
+    expect(index[0]).toEqual({ sku: 'CHEREY1B', title: 'Afro Puff Preto Cacheado 1B', stock: 5 })
+  })
+
+  it('sugere SKUs reais pelo nome, ranqueando pela cor', () => {
+    const sug = suggestShopifyLinks('Afro Puff', '1B', index)
+    expect(sug.length).toBe(2)
+    expect(sug[0].sku).toBe('CHEREY1B')   // sufixo do SKU bate com a cor → primeiro
+  })
+
+  it('nome sem correspondência na loja → vazio (não chuta)', () => {
+    expect(suggestShopifyLinks('Valentina', '1B', index)).toEqual([])
+    expect(suggestShopifyLinks('', '1B', index)).toEqual([])
+  })
+
+  it('acha por nome com acento/caixa diferente', () => {
+    const sug = suggestShopifyLinks('DEUSA', '2', index)
+    expect(sug[0].sku).toBe('DEUSA2')
+  })
+
+  it('findShopifyBySku valida o digitado (case-insensitive)', () => {
+    expect(findShopifyBySku('cherey1b', index)?.title).toContain('Afro Puff Preto')
+    expect(findShopifyBySku('NAOEXISTE', index)).toBeNull()
+    expect(findShopifyBySku('', index)).toBeNull()
+  })
+
+  it('cache vazio/nulo não quebra', () => {
+    expect(buildShopifyIndex(null)).toEqual([])
+    expect(suggestShopifyLinks('Afro', '1B', [])).toEqual([])
   })
 })
 

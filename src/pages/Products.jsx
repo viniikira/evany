@@ -5,7 +5,7 @@ import { ColorSwatch } from '../components/ColorSwatch'
 import { ColorChip } from '../components/ColorChip'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { NameAutocomplete } from '../components/NameAutocomplete'
-import { proposeSku } from '../lib/creationAssist'
+import { proposeSku, buildShopifyIndex, suggestShopifyLinks, findShopifyBySku } from '../lib/creationAssist'
 import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { FavoriteStar } from '../components/FavoriteStar'
 import { listProducts, createProduct, updateProduct, deleteProduct,
@@ -566,6 +566,7 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
         names={names}
         existingProducts={products}
         orders={orders}
+        shopifyCache={shopifyCache}
         onSave={save}
         onClose={() => setModal(null)}
         perm={perm}
@@ -593,7 +594,7 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
 // ═══════════════════════════════════════════════════════════════════
 // PRODUCT MODAL — ordem otimizada: foto/nome no topo
 // ═══════════════════════════════════════════════════════════════════
-function ProductModal({ product, collections, factories, colors, names, existingProducts = [], orders = [], onSave, onClose, perm }) {
+function ProductModal({ product, collections, factories, colors, names, existingProducts = [], orders = [], shopifyCache = null, onSave, onClose, perm }) {
   const [f, setF] = useState(() => {
     const base = product || {}
     return {
@@ -704,6 +705,9 @@ function ProductModal({ product, collections, factories, colors, names, existing
   // production sem como sair. Agora libera todos — você decide manualmente quando precisar.
   const MANUAL_CV_ST = COLOR_STATUSES
   // Callback form em todas mutações de arrays (evita state stale)
+  // v13.57 — índice do cache da Shopify: sugere SKUs REAIS e valida os digitados
+  const shopifyIndex = useMemo(() => buildShopifyIndex(shopifyCache), [shopifyCache])
+
   const addCV = () => {
     // Nova cor herda o status do produto (developing→idea, in_production→production, etc).
     // Coerência entre produto e suas variantes.
@@ -894,6 +898,37 @@ function ProductModal({ product, collections, factories, colors, names, existing
                         >✨ {proposeSku(f.name, cv.code)}</button>
                       )}
                     </div>
+                    {/* v13.57 — vínculo real com a Shopify: valida SKU digitado / sugere o verdadeiro */}
+                    {(() => {
+                      if (shopifyIndex.length === 0) return null
+                      if (cv.sku) {
+                        const linked = findShopifyBySku(cv.sku, shopifyIndex)
+                        return (
+                          <div style={{ gridColumn: '1 / -1', fontSize: 10, color: linked ? '#047857' : '#B45309' }}>
+                            {linked
+                              ? <span title={linked.title}>🛒 vinculado: {linked.title.length > 36 ? linked.title.slice(0, 36) + '…' : linked.title} · {linked.stock ?? '?'} un</span>
+                              : <span title="Nenhum produto da Shopify tem esse SKU (na última sincronização). Confira ou use uma sugestão.">⚠️ SKU não encontrado na Shopify</span>}
+                          </div>
+                        )
+                      }
+                      const sug = suggestShopifyLinks(f.name, cv.code, shopifyIndex, 2)
+                      if (sug.length === 0) return null
+                      return (
+                        <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                          <span className="text-muted" style={{ fontSize: 9 }}>🛒 na Shopify:</span>
+                          {sug.map(sg => (
+                            <button
+                              key={sg.sku}
+                              type="button"
+                              className="btn btn-outline btn-sm"
+                              style={{ padding: '1px 6px', fontSize: 10 }}
+                              onClick={() => updCV(cv.id, 'sku', sg.sku)}
+                              title={`${sg.title} · ${sg.stock ?? '?'} em estoque — clique pra usar este SKU real`}
+                            >{sg.sku}</button>
+                          ))}
+                        </div>
+                      )
+                    })()}
                   </div>
                   <button className="btn-icon text-danger" style={{ flexShrink: 0, padding: 2 }} onClick={() => rmCV(cv.id)} title="Remover" aria-label="Remover cor">✕</button>
                 </div>
