@@ -2,7 +2,7 @@
 // v13.55 — Testa o mapeamento hash ↔ página e o guard de permissão.
 
 import { describe, it, expect } from 'vitest'
-import { PAGE_SLUGS, hashForPage, pageForHash, isPageAllowed } from './router'
+import { PAGE_SLUGS, hashForPage, pageForHash, isPageAllowed, entitySegmentForHash, hashForEntity, slugifyName, matchesEntity } from './router'
 
 describe('hashForPage / pageForHash', () => {
   it('ida e volta pra todas as páginas', () => {
@@ -35,6 +35,40 @@ describe('hashForPage / pageForHash', () => {
 
   it('página desconhecida vira raiz', () => {
     expect(hashForPage('xyz')).toBe('#/')
+  })
+})
+
+describe('deep-links de item', () => {
+  it('extrai o segmento do item', () => {
+    expect(entitySegmentForHash('#/pedidos/novembro-2025')).toBe('novembro-2025')
+    expect(entitySegmentForHash('#/produtos/LARA')).toBe('lara')
+    expect(entitySegmentForHash('#/pedidos')).toBeNull()
+    expect(entitySegmentForHash('#/pedidos/')).toBeNull()
+    expect(entitySegmentForHash('')).toBeNull()
+  })
+
+  it('monta o hash do item (com encoding)', () => {
+    expect(hashForEntity('orders', 'novembro-2025')).toBe('#/pedidos/novembro-2025')
+    expect(hashForEntity('products', 'ana beatriz')).toBe('#/produtos/ana%20beatriz')
+    expect(hashForEntity('orders', null)).toBe('#/pedidos')
+  })
+
+  it('slugifyName remove acentos e espaços', () => {
+    expect(slugifyName('Ana Beatriz')).toBe('ana-beatriz')
+    expect(slugifyName('VÂNIA')).toBe('vania')
+    expect(slugifyName('Novembro 2025')).toBe('novembro-2025')
+    expect(slugifyName('  ')).toBe('')
+  })
+
+  it('matchesEntity: id completo, prefixo ≥8 e slug de nome', () => {
+    const item = { id: '3f2a9b7c-1111-2222-3333-444455556666', name: 'Novembro 2025' }
+    expect(matchesEntity('3f2a9b7c-1111-2222-3333-444455556666', item)).toBe(true)
+    expect(matchesEntity('3f2a9b7c', item)).toBe(true)          // prefixo de 8
+    expect(matchesEntity('3f2a', item)).toBe(false)             // prefixo curto demais
+    expect(matchesEntity('novembro-2025', item)).toBe(true)     // slug do nome
+    expect(matchesEntity('dezembro-2025', item)).toBe(false)
+    expect(matchesEntity(null, item)).toBe(false)
+    expect(matchesEntity('x', {})).toBe(false)
   })
 })
 

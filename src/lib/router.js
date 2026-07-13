@@ -50,6 +50,49 @@ export function pageForHash(hash) {
   return SLUG_TO_PAGE[slug] || null
 }
 
+// ═══ v13.56 — Deep-links de item: #/pedidos/novembro-2025, #/produtos/lara ═══
+
+/** Segundo segmento do hash ('#/pedidos/abc' → 'abc'), ou null. */
+export function entitySegmentForHash(hash) {
+  const parts = (hash || '').replace(/^#\/?/, '').split('?')[0].split('/')
+  const seg = (parts[1] || '').trim()
+  if (!seg) return null
+  try { return decodeURIComponent(seg).toLowerCase() } catch { return seg.toLowerCase() }
+}
+
+/** Hash de um item dentro de uma página: ('orders','novembro-2025') → '#/pedidos/novembro-2025'. */
+export function hashForEntity(page, segment) {
+  const slug = PAGE_SLUGS[page]
+  if (!slug || !segment) return hashForPage(page)
+  return `#/${slug}/${encodeURIComponent(segment)}`
+}
+
+/** Slug de nome: 'Ana Beatriz' → 'ana-beatriz' (minúsculas, sem acento). */
+export function slugifyName(name) {
+  return (name || '')
+    .toString()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/**
+ * O segmento da URL aponta pra este item? Aceita: id completo, prefixo de id
+ * (≥8 chars — suficiente pra UUID sem colisão nesta escala) ou slug do nome.
+ */
+export function matchesEntity(segment, { id, name } = {}) {
+  if (!segment) return false
+  const seg = segment.toLowerCase()
+  if (id) {
+    const idLow = id.toLowerCase()
+    if (idLow === seg || (seg.length >= 8 && idLow.startsWith(seg))) return true
+  }
+  if (name && slugifyName(name) === seg) return true
+  return false
+}
+
 /**
  * A página é visível pro papel do usuário? Espelha o `show` do menu (App.jsx).
  * Links diretos pra telas sem permissão caem no dashboard.

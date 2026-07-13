@@ -6,6 +6,7 @@ import { CompletionSummaryModal } from '../components/orders/CompletionSummaryMo
 import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
+import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { OrderCreator } from '../components/orders/OrderCreator'
 import {
   listOrders, createOrder, updateOrder, deleteOrder, updateOrderStatus,
@@ -80,14 +81,29 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
   
   // Abre o detalhe de um pedido específico quando vem de outra tela
   // (ex: Visão Financeira clica em pedido atrasado → navega + abre detalhe)
+  // v13.56 — também aceita deep-link: id completo, prefixo (≥8) ou slug do nome
   useEffect(() => {
     if (!initialDetailId || orders.length === 0) return
-    const target = orders.find(o => o.id === initialDetailId)
-    if (target) {
-      setDetail(target)
-      onDetailOpened?.()
-    }
+    const target = orders.find(o => matchesEntity(initialDetailId, { id: o.id, name: o.order_name }))
+    if (target) setDetail(target)
+    onDetailOpened?.()
   }, [initialDetailId, orders])
+
+  // v13.56 — URL reflete o detalhe aberto (#/pedidos/novembro-2025) pra
+  // favoritar/compartilhar. Nome vira slug se for único; senão prefixo do id.
+  // O ref evita resetar a URL no mount (apagaria o deep-link antes de carregar).
+  const hadDetailRef = useRef(false)
+  useEffect(() => {
+    if (detail) {
+      hadDetailRef.current = true
+      const slug = slugifyName(detail.order_name)
+      const unique = slug && orders.filter(o => slugifyName(o.order_name) === slug).length === 1
+      window.location.hash = hashForEntity('orders', unique ? slug : detail.id.slice(0, 8))
+    } else if (hadDetailRef.current) {
+      hadDetailRef.current = false
+      if (pageForHash(window.location.hash) === 'orders') window.location.hash = hashForPage('orders')
+    }
+  }, [detail])
 
   // v13.41 — Hook DEVE vir antes de qualquer early return (rules of hooks).
   // Prazo médio por fábrica (calculado dos pedidos concluídos) — usado no OrderModal

@@ -6,6 +6,7 @@ import { ColorChip } from '../components/ColorChip'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { NameAutocomplete } from '../components/NameAutocomplete'
 import { proposeSku } from '../lib/creationAssist'
+import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { FavoriteStar } from '../components/FavoriteStar'
 import { listProducts, createProduct, updateProduct, deleteProduct,
   bulkUpdateColorStatus, updateProductStatus,
@@ -26,7 +27,7 @@ import {
 
 // uid e UC importados de lib/utils
 
-export default function ProductsPage({ user, perm, shopifyCache, initialData = [], initialColors = [], onMutate }) {
+export default function ProductsPage({ user, perm, shopifyCache, initialData = [], initialColors = [], onMutate, initialDetailId, onDetailOpened }) {
   // Cache inicial vindo do App: products já carregados na entrada do sistema.
   // Loading só fica true se NÃO temos cache.
   const [products, setProducts] = useState(initialData)
@@ -45,6 +46,29 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
   const [detail, setDetail] = useState(null)
   const confirm = useConfirm()
   const toast = useToast()
+
+  // v13.56 — deep-link: #/produtos/lara abre o detalhe direto (id, prefixo ou slug do nome)
+  useEffect(() => {
+    if (!initialDetailId || products.length === 0) return
+    const target = products.find(p => matchesEntity(initialDetailId, { id: p.id, name: p.name }))
+    if (target) setDetail(target)
+    onDetailOpened?.()
+  }, [initialDetailId, products])
+
+  // v13.56 — URL reflete o produto aberto (#/produtos/lara).
+  // O ref evita resetar a URL no mount (apagaria o deep-link antes de carregar).
+  const hadDetailRef = useRef(false)
+  useEffect(() => {
+    if (detail) {
+      hadDetailRef.current = true
+      const slug = slugifyName(detail.name)
+      const unique = slug && products.filter(p => slugifyName(p.name) === slug).length === 1
+      window.location.hash = hashForEntity('products', unique ? slug : detail.id.slice(0, 8))
+    } else if (hadDetailRef.current) {
+      hadDetailRef.current = false
+      if (pageForHash(window.location.hash) === 'products') window.location.hash = hashForPage('products')
+    }
+  }, [detail])
 
   const [orders, setOrders] = useState([])
 

@@ -1,7 +1,7 @@
 // src/App.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { getProfile, signOut, onAuthChange, permsFor } from './lib/auth'
-import { hashForPage, pageForHash, isPageAllowed } from './lib/router'
+import { hashForPage, pageForHash, isPageAllowed, entitySegmentForHash } from './lib/router'
 import { useUsdRate, useSessionTimeout, useTabLock } from './lib/hooks'
 import { listProducts } from './lib/data/products'
 import { listIdeas, listCollections, listColors, listFactories, listNames, listLogs, getShopifyCache, cleanOldLogs } from './lib/data/misc'
@@ -58,7 +58,14 @@ function AppCore() {
   const [searchOpen, setSearchOpen] = useState(false)
   // Quando user clica num pedido vindo de outra tela (ex: Visão Financeira),
   // navega pra Pedidos e abre o detalhe daquele pedido específico.
-  const [pendingOpenOrderId, setPendingOpenOrderId] = useState(null)
+  const [pendingOpenOrderId, setPendingOpenOrderId] = useState(() => (
+    // v13.56 — deep-link: #/pedidos/novembro-2025 já abre com o detalhe pendente
+    pageForHash(window.location.hash) === 'orders' ? entitySegmentForHash(window.location.hash) : null
+  ))
+  // v13.56 — mesmo mecanismo pra produtos: #/produtos/lara
+  const [pendingOpenProductId, setPendingOpenProductId] = useState(() => (
+    pageForHash(window.location.hash) === 'products' ? entitySegmentForHash(window.location.hash) : null
+  ))
 
   // Dados globais do dashboard (carregados uma vez na entrada)
   const [dashData, setDashData] = useState({
@@ -88,15 +95,22 @@ function AppCore() {
 
   // ═══ v13.55 — Rotas por hash: URL ↔ página, nos dois sentidos ═══
   // Navegou no menu → URL vira #/pedidos (dá pra favoritar/compartilhar/F5).
+  // v13.56 — se o hash já aponta pra esta página (ex.: #/pedidos/novembro-2025),
+  // preserva o segmento do item; só reescreve quando a PÁGINA muda de fato.
   useEffect(() => {
-    const h = hashForPage(page)
-    if (window.location.hash !== h) window.location.hash = h
+    if (pageForHash(window.location.hash) === page) return
+    window.location.hash = hashForPage(page)
   }, [page])
   // Mudou a URL (voltar/avançar do navegador, link colado) → troca a página.
+  // v13.56 — se o hash aponta pra um item (#/pedidos/xyz), marca pra abrir o detalhe.
   useEffect(() => {
     const onHash = () => {
       const p = pageForHash(window.location.hash)
-      if (p) setPage(prev => (p === prev ? prev : p))
+      if (!p) return
+      const seg = entitySegmentForHash(window.location.hash)
+      if (seg && p === 'orders') setPendingOpenOrderId(seg)
+      if (seg && p === 'products') setPendingOpenProductId(seg)
+      setPage(prev => (p === prev ? prev : p))
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
@@ -421,7 +435,7 @@ function AppCore() {
             />
           )}
           {page === 'ideas' && <IdeasPage user={profile} perm={perm} initialData={dashData.ideas} onMutate={loadGlobalData} />}
-          {page === 'products' && <ProductsPage user={profile} perm={perm} shopifyCache={dashData.shopifyCache} initialData={dashData.products} initialColors={dashData.colors} onMutate={loadGlobalData} />}
+          {page === 'products' && <ProductsPage user={profile} perm={perm} shopifyCache={dashData.shopifyCache} initialData={dashData.products} initialColors={dashData.colors} onMutate={loadGlobalData} initialDetailId={pendingOpenProductId} onDetailOpened={() => setPendingOpenProductId(null)} />}
           {page === 'producao' && <ProducaoPage products={dashData.products} orders={dashData.orders} colors={dashData.colors} />}
           {page === 'orders' && <OrdersPage user={profile} perm={perm} rate={rate} initialData={dashData.orders} initialIdeas={dashData.ideas} onMutate={loadGlobalData} initialDetailId={pendingOpenOrderId} onDetailOpened={() => setPendingOpenOrderId(null)} />}
           {page === 'shopify' && <ShopifyPage user={profile} perm={perm} />}
@@ -477,7 +491,11 @@ function AppCore() {
         orders={dashData.orders || []}
         colors={dashData.colors || []}
         onNavigate={(item) => {
-          if (item.type === 'product') setPage('products')
+          if (item.type === 'product') {
+            // v13.56 — busca global abre o produto direto (mesmo caminho do deep-link)
+            setPendingOpenProductId(item.id)
+            setPage('products')
+          }
           else if (item.type === 'idea') setPage('ideas')
           else if (item.type === 'order') {
             setPendingOpenOrderId(item.id)
