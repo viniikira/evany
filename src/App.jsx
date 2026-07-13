@@ -1,6 +1,7 @@
 // src/App.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { getProfile, signOut, onAuthChange, permsFor } from './lib/auth'
+import { hashForPage, pageForHash, isPageAllowed } from './lib/router'
 import { useUsdRate, useSessionTimeout, useTabLock } from './lib/hooks'
 import { listProducts } from './lib/data/products'
 import { listIdeas, listCollections, listColors, listFactories, listNames, listLogs, getShopifyCache, cleanOldLogs } from './lib/data/misc'
@@ -48,7 +49,8 @@ export default function App() {
 function AppCore() {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState('dashboard')
+  // v13.55 — página inicial vem da URL (#/pedidos abre em Pedidos, mesmo após login)
+  const [page, setPage] = useState(() => pageForHash(window.location.hash) || 'dashboard')
   const [sideOpen, setSideOpen] = useState(false)
   const [pendDrawerOpen, setPendDrawerOpen] = useState(false)
   const [atvDrawerOpen, setAtvDrawerOpen] = useState(false)
@@ -83,6 +85,27 @@ function AppCore() {
     })
     return () => data.subscription.unsubscribe()
   }, [])
+
+  // ═══ v13.55 — Rotas por hash: URL ↔ página, nos dois sentidos ═══
+  // Navegou no menu → URL vira #/pedidos (dá pra favoritar/compartilhar/F5).
+  useEffect(() => {
+    const h = hashForPage(page)
+    if (window.location.hash !== h) window.location.hash = h
+  }, [page])
+  // Mudou a URL (voltar/avançar do navegador, link colado) → troca a página.
+  useEffect(() => {
+    const onHash = () => {
+      const p = pageForHash(window.location.hash)
+      if (p) setPage(prev => (p === prev ? prev : p))
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  // Link direto pra tela sem permissão (ex.: equipe abrindo #/financeiro) → dashboard.
+  useEffect(() => {
+    if (!profile) return
+    if (!isPageAllowed(page, permsFor(profile.role))) setPage('dashboard')
+  }, [profile, page])
 
   // v13.37 — Atalho Ctrl+K / Cmd+K pra abrir busca global.
   // v13.39 — Mais atalhos: "/" abre busca, sem exigir Ctrl.
