@@ -1,24 +1,23 @@
 // src/pages/Producao.jsx
-// v13.43 — Catálogo denso.
-//
-// Mudanças vs v13.42:
-//   - Header compacto (48px vs 400px) — título + stats inline
-//   - Grid 2 colunas pros cards de produto (não list full-width)
-//   - Foto clicável (bug da v13.42 corrigido)
-//   - Todas as informações organizadas: fábrica, coleção, cores, status
-//   - Agrupamento por fábrica mantido
-//   - Tipografia Fraunces/DM Mono mantida mas hierarquia menor
-//   - Toolbar sticky, filtros + ordenação
-//   - Stagger on-scroll mantido
-//   - Dark mode
+// v13.43 — Catálogo denso (Fraunces/DM Mono, agrupado por fábrica).
+// v13.61 — MEGA revisão (auditoria de UX): a página virou ESTRATÉGICA:
+//   - PEÇAS em primeiro lugar: total por produto, por cor (pill ×qtd) e por
+//     fábrica — antes não dava pra saber quantas peças estavam em produção
+//   - Pedidos vinculados visíveis em cada produto (chip clicável → abre o
+//     pedido), com chegada prevista e badge de atraso
+//   - KPIs no topo: peças em produção · produtos · cores · peças em trânsito
+//     · próxima chegada
+//   - Cards densos (foto 96px, não mais 160px de arte de marketing)
 //
 // Dados:
-//   - Tab "Em Produção": color_variants onde status === 'production'
-//   - Tab "Em Trânsito": pedidos com status === 'in_transit'
+//   - Tab "Em Produção": color_variants status 'production' + quantidades dos
+//     pedidos ativos (sent/manufacturing), matching case-insensitive
+//   - Tab "Em Trânsito": pedidos status 'in_transit'
 
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { Lightbox, ClearFiltersButton } from '../components/ui'
 import { listFactories, listCollections } from '../lib/data/misc'
+import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
 import { formatDate } from '../lib/utils'
 
 export default function ProducaoPage({
@@ -27,13 +26,14 @@ export default function ProducaoPage({
   colors = [],
   factories: factoriesProp,
   collections: collectionsProp,
+  onOpenOrder,
 }) {
   const [tab, setTab] = useState('production')
   const [search, setSearch] = useState('')
   const [factoryFilter, setFactoryFilter] = useState('')
   const [collectionFilter, setCollectionFilter] = useState('')
   const [showOnlyStuck, setShowOnlyStuck] = useState(false)
-  const [sortBy, setSortBy] = useState('urgency')
+  const [sortBy, setSortBy] = useState('pieces')
   const [lb, setLb] = useState(null)
 
   const [factories, setFactories] = useState(factoriesProp || [])
@@ -44,18 +44,32 @@ export default function ProducaoPage({
     if (!collectionsProp) listCollections().then(setCollections).catch(() => setCollections([]))
   }, [factoriesProp, collectionsProp])
 
-  // ═════════ INDEX: cor → pedidos ativos ═════════
+  // ═════════ INDEX: (produto, cor) → PEÇAS + pedidos ativos ═════════
+  // v13.61 — antes contava "quantos itens de pedido", agora soma QUANTIDADES
+  // e guarda os pedidos (com chegada/atraso) pra vincular na tela.
   const colorOrderIndex = useMemo(() => {
+    const lead = computeFactoryLeadTime(orders)
     const idx = new Map()
     for (const o of orders) {
       if (o.status !== 'sent' && o.status !== 'manufacturing') continue
+      if (o.deleted_at || o.purged_at) continue
+      const delay = computeOrderDelay(o, lead)
+      const orderInfo = {
+        id: o.id,
+        name: o.order_name || o.factory,
+        status: o.status,
+        expectedArrival: o.expected_arrival || null,
+        isLate: !!delay?.isLate,
+        daysLate: delay?.daysLate || 0,
+      }
       for (const it of (o.items || [])) {
+        if (!it.product_id) continue
         for (const c of (it.colors || [])) {
-          if (!c.code || !it.product_id) continue
-          const key = `${it.product_id}|${c.code}`
-          const cur = idx.get(key) || { count: 0, hasOrder: false }
-          cur.count++
-          cur.hasOrder = true
+          if (!c.code) continue
+          const key = `${it.product_id}|${c.code.trim().toLowerCase()}`
+          const cur = idx.get(key) || { qty: 0, orders: new Map() }
+          cur.qty += Number(c.qty) || 0
+          if (!cur.orders.has(o.id)) cur.orders.set(o.id, orderInfo)
           idx.set(key, cur)
         }
       }
@@ -63,24 +77,34 @@ export default function ProducaoPage({
     return idx
   }, [orders])
 
-  // ═════════ PRODUCTION: agrupa por produto ═════════
+  // ═════════ PRODUCTION: agrupa por produto (com peças e pedidos) ═════════
   const productionGroups = useMemo(() => {
     const groups = new Map()
     for (const p of products) {
       for (const cv of (p.color_variants || [])) {
         if (cv.status !== 'production') continue
         if (!groups.has(p.id)) groups.set(p.id, { product: p, cores: [] })
-        const info = colorOrderIndex.get(`${p.id}|${cv.code}`)
+        const info = colorOrderIndex.get(`${p.id}|${(cv.code || '').trim().toLowerCase()}`)
         groups.get(p.id).cores.push({
           code: cv.code,
           sku: cv.sku,
           colorData: colors.find(c => c.code === cv.code),
-          orderCount: info?.count || 0,
-          hasOrder: !!info?.hasOrder,
+          qty: info?.qty || 0,
+          hasOrder: !!info,
+          orders: info ? [...info.orders.values()] : [],
         })
       }
     }
-    return [...groups.values()]
+    // Totais e pedidos distintos por produto
+    return [...groups.values()].map(g => {
+      const orderMap = new Map()
+      for (const c of g.cores) for (const o of c.orders) if (!orderMap.has(o.id)) orderMap.set(o.id, o)
+      return {
+        ...g,
+        totalQty: g.cores.reduce((s, c) => s + c.qty, 0),
+        orders: [...orderMap.values()],
+      }
+    })
   }, [products, colors, colorOrderIndex])
 
   // ═════════ TRANSIT ═════════
@@ -137,8 +161,10 @@ export default function ProducaoPage({
         if (collectionFilter && g.product.collection !== collectionFilter) return false
         return true
       })
+      .map(g => ({ ...g, totalQty: g.cores.reduce((s, c) => s + c.qty, 0) }))
 
     const sortFn = {
+      pieces: (a, b) => b.totalQty - a.totalQty || (a.product.name || '').localeCompare(b.product.name || ''),
       urgency: (a, b) => {
         const aStuck = a.cores.filter(c => !c.hasOrder).length
         const bStuck = b.cores.filter(c => !c.hasOrder).length
@@ -161,6 +187,7 @@ export default function ProducaoPage({
       factoryName,
       groups,
       totalCores: groups.reduce((s, g) => s + g.cores.length, 0),
+      totalQty: groups.reduce((s, g) => s + g.totalQty, 0),
       stuckCores: groups.reduce((s, g) => s + g.cores.filter(c => !c.hasOrder).length, 0),
     }))
   }, [productionGroups, search, factoryFilter, collectionFilter, showOnlyStuck, sortBy])
@@ -185,10 +212,16 @@ export default function ProducaoPage({
       .filter(t => !factoryFilter || t.order.factory === factoryFilter)
   }, [transitByOrder, search, factoryFilter])
 
-  // ═════════ STATS ═════════
+  // ═════════ KPIs ═════════
+  const totalPiecesProduction = productionGroups.reduce((s, g) => s + g.totalQty, 0)
   const totalCoresProduction = productionGroups.reduce((s, g) => s + g.cores.length, 0)
   const totalStuck = productionGroups.reduce((s, g) => s + g.cores.filter(c => !c.hasOrder).length, 0)
-  const transitTotal = transitByOrder.reduce((s, t) => s + t.products.reduce((s2, p) => s2 + p.cores.length, 0), 0)
+  const transitPieces = transitByOrder.reduce((s, t) =>
+    s + t.products.reduce((s2, p) => s2 + p.cores.reduce((s3, c) => s3 + (c.qty || 0), 0), 0), 0)
+  const nextArrival = transitByOrder
+    .map(t => t.expectedArrival)
+    .filter(Boolean)
+    .sort((a, b) => new Date(a) - new Date(b))[0] || null
 
   const hasFilters = !!(search || factoryFilter || collectionFilter || showOnlyStuck)
   const clearFilters = () => {
@@ -200,14 +233,32 @@ export default function ProducaoPage({
       <style>{PRODUCAO_STYLES}</style>
       {lb && <Lightbox src={lb} onClose={() => setLb(null)} />}
 
-      {/* ═════════ HEADER COMPACTO ═════════ */}
+      {/* ═════════ HEADER + KPIs ═════════ */}
       <div className="prd-header-compact">
         <div className="prd-header-left">
           <h1 className="prd-title-compact">Produç<em>ão</em></h1>
-          {tab === 'production' && totalStuck > 0 && (
-            <div className="prd-alert-inline">
-              <span className="prd-alert-dot"></span>
-              <strong>{totalStuck}</strong> sem pedido
+        </div>
+        <div className="prd-kpis">
+          <div className="prd-kpi">
+            <div className="prd-kpi-val">{totalPiecesProduction.toLocaleString('pt-BR')}</div>
+            <div className="prd-kpi-lbl">peças em produção</div>
+          </div>
+          <div className="prd-kpi">
+            <div className="prd-kpi-val">{productionGroups.length}</div>
+            <div className="prd-kpi-lbl">produtos</div>
+          </div>
+          <div className="prd-kpi">
+            <div className="prd-kpi-val">{totalCoresProduction}{totalStuck > 0 && <span className="prd-kpi-warn" title="Cores em produção sem nenhum pedido ativo"> · {totalStuck}⚠</span>}</div>
+            <div className="prd-kpi-lbl">cores{totalStuck > 0 ? ' · sem pedido' : ''}</div>
+          </div>
+          <div className="prd-kpi">
+            <div className="prd-kpi-val">{transitPieces.toLocaleString('pt-BR')}</div>
+            <div className="prd-kpi-lbl">peças em trânsito</div>
+          </div>
+          {nextArrival && (
+            <div className="prd-kpi">
+              <div className="prd-kpi-val">{formatDate(nextArrival, 'full')}</div>
+              <div className="prd-kpi-lbl">próxima chegada</div>
             </div>
           )}
         </div>
@@ -221,13 +272,13 @@ export default function ProducaoPage({
               className={`prd-tab ${tab === 'production' ? 'active' : ''}`}
               onClick={() => setTab('production')}
             >
-              🏭 Em produção <span className="prd-tab-count">{totalCoresProduction}</span>
+              🏭 Em produção <span className="prd-tab-count">{totalPiecesProduction.toLocaleString('pt-BR')} pç</span>
             </button>
             <button
               className={`prd-tab ${tab === 'in_transit' ? 'active' : ''}`}
               onClick={() => setTab('in_transit')}
             >
-              ✈ Em trânsito <span className="prd-tab-count">{transitTotal}</span>
+              ✈ Em trânsito <span className="prd-tab-count">{transitPieces.toLocaleString('pt-BR')} pç</span>
             </button>
           </div>
           <div className="prd-search">
@@ -261,6 +312,7 @@ export default function ProducaoPage({
                 value={sortBy}
                 onChange={e => setSortBy(e.target.value)}
               >
+                <option value="pieces">Mais peças</option>
                 <option value="urgency">Urgência</option>
                 <option value="alpha">A–Z</option>
                 <option value="count">Mais cores</option>
@@ -287,12 +339,14 @@ export default function ProducaoPage({
             byFactory={productionByFactory}
             hasFilters={hasFilters}
             onPhotoClick={setLb}
+            onOpenOrder={onOpenOrder}
           />
         ) : (
           <TransitContent
             byOrder={filteredTransitByOrder}
             hasFilters={hasFilters}
             onPhotoClick={setLb}
+            onOpenOrder={onOpenOrder}
           />
         )}
       </div>
@@ -304,7 +358,7 @@ export default function ProducaoPage({
 // SUB-COMPONENTS
 // ═════════════════════════════════════════════════════════════
 
-function ProductionContent({ byFactory, hasFilters, onPhotoClick }) {
+function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder }) {
   if (byFactory.length === 0) {
     return (
       <EmptyState
@@ -318,54 +372,40 @@ function ProductionContent({ byFactory, hasFilters, onPhotoClick }) {
   }
   return (
     <>
-      {byFactory.map(({ factoryName, groups, totalCores, stuckCores }, idx) => (
-        <FactoryGroup
-          key={factoryName}
-          index={idx}
-          factoryName={factoryName}
-          groups={groups}
-          totalCores={totalCores}
-          stuckCores={stuckCores}
-          onPhotoClick={onPhotoClick}
-        />
+      {byFactory.map(({ factoryName, groups, totalCores, totalQty, stuckCores }, idx) => (
+        <div className="prd-factory-group" key={factoryName} style={{ animationDelay: `${idx * 0.08}s` }}>
+          <div className="prd-factory-sep">
+            <div className="prd-factory-name">
+              <em>{factoryName}</em>
+            </div>
+            <div className="prd-factory-meta">
+              <span className="prd-factory-qty">{totalQty.toLocaleString('pt-BR')} peças</span>
+              {' '}· {groups.length} produto{groups.length !== 1 ? 's' : ''} · {totalCores} cor{totalCores !== 1 ? 'es' : ''}
+              {stuckCores > 0 && <span className="stuck-inline"> · {stuckCores} sem pedido</span>}
+            </div>
+          </div>
+          <div className="prd-card-grid">
+            {groups.map((g, i) => (
+              <ProductCard
+                key={g.product.id}
+                group={g}
+                staggerDelay={i * 0.04}
+                onPhotoClick={onPhotoClick}
+                onOpenOrder={onOpenOrder}
+              />
+            ))}
+          </div>
+        </div>
       ))}
     </>
   )
 }
 
-function FactoryGroup({ factoryName, groups, totalCores, stuckCores, onPhotoClick }) {
-  return (
-    <div className="prd-factory-group">
-      <div className="prd-factory-sep">
-        <div className="prd-factory-name">
-          <em>{factoryName}</em>
-        </div>
-        <div className="prd-factory-meta">
-          {groups.length} produto{groups.length !== 1 ? 's' : ''} · {totalCores} cor{totalCores !== 1 ? 'es' : ''}
-          {stuckCores > 0 && <span className="stuck-inline"> · {stuckCores} sem pedido</span>}
-        </div>
-      </div>
-      <div className="prd-card-grid">
-        {groups.map((g, i) => (
-          <ProductCard
-            key={g.product.id}
-            group={g}
-            staggerDelay={i * 0.05}
-            onPhotoClick={onPhotoClick}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function ProductCard({ group, staggerDelay, onPhotoClick }) {
-  const { product, cores } = group
+function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder }) {
+  const { product, cores, totalQty, orders = [] } = group
   const photoUrl = product.card_image_url || (product.photos || [])[0]
   const stuckCount = cores.filter(c => !c.hasOrder).length
   const cardRef = useRef(null)
-  const photoWrapRef = useRef(null)
-  const swapImgRef = useRef(null)
   const [revealed, setRevealed] = useState(false)
 
   useEffect(() => {
@@ -386,19 +426,6 @@ function ProductCard({ group, staggerDelay, onPhotoClick }) {
     return () => observer.disconnect()
   }, [])
 
-  const handleSwatchHover = (url) => {
-    if (!url || !swapImgRef.current || !photoWrapRef.current) return
-    const swapImg = swapImgRef.current
-    const wrap = photoWrapRef.current
-    swapImg.src = url
-    const apply = () => wrap.classList.add('swapped')
-    if (swapImg.complete) apply()
-    else swapImg.onload = apply
-  }
-  const handleSwatchLeave = () => {
-    if (photoWrapRef.current) photoWrapRef.current.classList.remove('swapped')
-  }
-
   return (
     <article
       ref={cardRef}
@@ -406,84 +433,76 @@ function ProductCard({ group, staggerDelay, onPhotoClick }) {
       style={{ transitionDelay: `${staggerDelay}s` }}
     >
       <div
-        ref={photoWrapRef}
         className="prd-photo-wrap"
         onClick={() => photoUrl && onPhotoClick(photoUrl)}
         title={photoUrl ? 'Clique para ampliar' : ''}
       >
         {photoUrl ? (
-          <>
-            <img className="primary" src={photoUrl} alt={product.name} loading="lazy" />
-            <img ref={swapImgRef} className="swap-in" src="" alt="" />
-            <div className="prd-photo-zoom-hint">⊕</div>
-          </>
+          <img className="primary" src={photoUrl} alt={product.name} loading="lazy" />
         ) : (
           <div className="prd-photo-placeholder"><span>👑</span></div>
-        )}
-        {stuckCount > 0 && (
-          <div className="prd-photo-badge" title={`${stuckCount} sem pedido`}>
-            <span className="prd-badge-dot"></span>
-            {stuckCount}
-          </div>
         )}
       </div>
 
       <div className="prd-info">
-        <h2 className="prd-prod-name">{product.name || 'Sem nome'}</h2>
-        <div className="prd-prod-meta">
-          {product.collection && <span className="prd-collection">{product.collection}</span>}
+        {/* Nome + TOTAL DE PEÇAS (a pergunta nº1: quantas peças deste produto?) */}
+        <div className="prd-prod-head">
+          <h2 className="prd-prod-name">{product.name || 'Sem nome'}</h2>
+          <div className={`prd-prod-total ${totalQty === 0 ? 'zero' : ''}`} title={totalQty === 0 ? 'Nenhuma peça em pedido ativo' : 'Peças somadas dos pedidos ativos'}>
+            {totalQty > 0 ? <>{totalQty.toLocaleString('pt-BR')}<small> pç</small></> : '0 pç'}
+          </div>
         </div>
-        <div className="prd-swatches-label">
-          <span>{cores.length} cor{cores.length !== 1 ? 'es' : ''}</span>
-          {stuckCount > 0 && (
-            <span className="prd-stuck-count">· {stuckCount} sem pedido</span>
-          )}
-        </div>
-        <div className="prd-swatches-row">
+        {product.collection && <div className="prd-prod-meta"><span className="prd-collection">{product.collection}</span></div>}
+
+        {/* Cores como pills COM QUANTIDADE */}
+        <div className="prd-pills">
           {cores.map((c, idx) => (
-            <Swatch
+            <div
               key={`${c.code}-${idx}`}
-              cor={c}
-              onHover={handleSwatchHover}
-              onLeave={handleSwatchLeave}
-              onPhotoClick={onPhotoClick}
-            />
+              className={`prd-pill ${!c.hasOrder ? 'stuck' : ''}`}
+              onClick={(e) => { e.stopPropagation(); if (c.colorData?.photo_url) onPhotoClick(c.colorData.photo_url) }}
+              title={c.hasOrder
+                ? `${c.qty} peça${c.qty !== 1 ? 's' : ''} em pedido ativo${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''}`
+                : `Em produção SEM pedido ativo${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''}`}
+            >
+              <span className="prd-pill-dot" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
+                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
+              </span>
+              <span className="prd-pill-code">{c.code}</span>
+              {c.hasOrder
+                ? <span className="prd-pill-qty">×{c.qty}</span>
+                : <span className="prd-pill-warn" title="Sem pedido ativo">sem pedido</span>}
+            </div>
           ))}
         </div>
+
+        {/* Pedidos vinculados (clicáveis) com chegada/atraso */}
+        {(orders.length > 0 || stuckCount > 0) && (
+          <div className="prd-order-chips">
+            {orders.map(o => (
+              <button
+                key={o.id}
+                className={`prd-order-chip ${o.isLate ? 'late' : ''}`}
+                onClick={() => onOpenOrder && onOpenOrder(o.id)}
+                title={onOpenOrder ? 'Abrir o pedido' : undefined}
+              >
+                📋 {o.name}
+                {o.isLate
+                  ? <span className="prd-chip-late">atrasado {o.daysLate}d</span>
+                  : (o.expectedArrival ? <span className="prd-chip-eta">chega {formatDate(o.expectedArrival, 'full')}</span> : null)}
+              </button>
+            ))}
+            {stuckCount > 0 && orders.length === 0 && (
+              <span className="prd-order-chip none">⚠ nenhum pedido ativo — considere encomendar ou tirar de produção</span>
+            )}
+          </div>
+        )}
       </div>
     </article>
   )
 }
 
-function Swatch({ cor, onHover, onLeave, onPhotoClick }) {
-  const { code, colorData, hasOrder, orderCount } = cor
-  const photoUrl = colorData?.photo_url
-  const tip = hasOrder
-    ? `em ${orderCount} pedido${orderCount !== 1 ? 's' : ''}`
-    : 'sem pedido'
-  return (
-    <div
-      className={`prd-swatch ${!hasOrder ? 'stuck' : ''}`}
-      onMouseEnter={() => onHover(photoUrl)}
-      onMouseLeave={onLeave}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (photoUrl) onPhotoClick(photoUrl)
-      }}
-    >
-      <div
-        className="prd-swatch-circle"
-        style={{ background: colorData?.hex || 'var(--border-light)' }}
-      >
-        {photoUrl && <img src={photoUrl} alt={code} loading="lazy" />}
-      </div>
-      <div className="prd-swatch-code">{code}</div>
-      <div className="prd-swatch-tip">{tip}</div>
-    </div>
-  )
-}
-
-function TransitContent({ byOrder, hasFilters, onPhotoClick }) {
+function TransitContent({ byOrder, hasFilters, onPhotoClick, onOpenOrder }) {
   if (byOrder.length === 0) {
     return (
       <EmptyState
@@ -498,18 +517,23 @@ function TransitContent({ byOrder, hasFilters, onPhotoClick }) {
   return (
     <>
       {byOrder.map((t, idx) => (
-        <TransitCard key={t.order.id} transit={t} index={idx} onPhotoClick={onPhotoClick} />
+        <TransitCard key={t.order.id} transit={t} index={idx} onPhotoClick={onPhotoClick} onOpenOrder={onOpenOrder} />
       ))}
     </>
   )
 }
 
-function TransitCard({ transit, index, onPhotoClick }) {
+function TransitCard({ transit, index, onPhotoClick, onOpenOrder }) {
   const { order, orderDate, expectedArrival, products } = transit
   const totalPieces = products.reduce((s, p) =>
     s + p.cores.reduce((s2, c) => s2 + (c.qty || 0), 0), 0)
   const cardRef = useRef(null)
   const [revealed, setRevealed] = useState(false)
+
+  // Dias até a chegada (ou desde a data prevista, se passou)
+  const etaDays = expectedArrival
+    ? Math.ceil((new Date(expectedArrival) - Date.now()) / 86400000)
+    : null
 
   useEffect(() => {
     if (!cardRef.current) return
@@ -538,7 +562,18 @@ function TransitCard({ transit, index, onPhotoClick }) {
       <div className="prd-transit-header">
         <div className="prd-transit-name">
           <span className="prd-transit-eyebrow">pedido</span>
-          <h3>{order.order_name || order.factory}</h3>
+          <h3
+            className={onOpenOrder ? 'clickable' : ''}
+            onClick={() => onOpenOrder && onOpenOrder(order.id)}
+            title={onOpenOrder ? 'Abrir o pedido' : undefined}
+          >{order.order_name || order.factory}</h3>
+          {etaDays != null && (
+            <span className={`prd-eta-badge ${etaDays < 0 ? 'late' : (etaDays <= 7 ? 'soon' : '')}`}>
+              {etaDays < 0
+                ? `previsto há ${Math.abs(etaDays)}d`
+                : etaDays === 0 ? 'chega hoje' : `chega em ${etaDays}d`}
+            </span>
+          )}
         </div>
         <div className="prd-transit-meta">
           <span>🏭 {order.factory}</span>
@@ -551,7 +586,7 @@ function TransitCard({ transit, index, onPhotoClick }) {
             </>
           )}
           <span className="prd-meta-sep">·</span>
-          <span>{totalPieces} peça{totalPieces !== 1 ? 's' : ''}</span>
+          <span><strong>{totalPieces}</strong> peça{totalPieces !== 1 ? 's' : ''}</span>
         </div>
       </div>
       <div className="prd-transit-products">
@@ -588,26 +623,22 @@ function TransitProductRow({ product, cores, onPhotoClick }) {
         <div className="prd-transit-row-name">
           {product.name} <span className="prd-transit-row-qty">{totalQty} peça{totalQty !== 1 ? 's' : ''}</span>
         </div>
-        <div className="prd-transit-pills">
+        <div className="prd-pills">
           {cores.map((c, idx) => (
             <div
               key={`${c.code}-${idx}`}
-              className="prd-transit-pill"
+              className="prd-pill"
               onClick={(e) => {
                 e.stopPropagation()
                 if (c.colorData?.photo_url) onPhotoClick(c.colorData.photo_url)
               }}
+              title={c.colorData?.name_pt || c.code}
             >
-              <span
-                className="prd-transit-pill-dot"
-                style={{ background: c.colorData?.hex || 'var(--border-light)' }}
-              >
-                {c.colorData?.photo_url && (
-                  <img src={c.colorData.photo_url} alt="" loading="lazy" />
-                )}
+              <span className="prd-pill-dot" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
+                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
               </span>
-              <span className="prd-transit-pill-code">{c.code}</span>
-              <span className="prd-transit-pill-qty">{c.qty}</span>
+              <span className="prd-pill-code">{c.code}</span>
+              <span className="prd-pill-qty">×{c.qty}</span>
             </div>
           ))}
         </div>
@@ -632,12 +663,12 @@ function EmptyState({ icon, title, desc }) {
 const PRODUCAO_STYLES = `
 .producao-page { position: relative; }
 
-/* ═══ HEADER COMPACTO (56px vs 400px antes) ═══ */
+/* ═══ HEADER + KPIs ═══ */
 .prd-header-compact {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 0 16px;
+  padding: 18px 0 14px;
   border-bottom: 1px solid var(--border-light);
   flex-wrap: wrap;
   gap: 16px;
@@ -662,33 +693,29 @@ const PRODUCAO_STYLES = `
   color: var(--accent);
   font-weight: 400;
 }
-.prd-alert-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.prd-kpis {
+  display: flex;
+  gap: 26px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.prd-kpi { text-align: right; }
+.prd-kpi-val {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.05;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+.prd-kpi-warn { color: var(--accent); font-size: 15px; font-weight: 600; }
+.prd-kpi-lbl {
   font-family: 'DM Mono', ui-monospace, monospace;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--text-secondary);
-  background: rgba(198,168,108,.1);
-  padding: 5px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--accent-light);
-}
-.prd-alert-inline strong {
-  color: var(--accent);
-  font-weight: 600;
-  font-size: 12px;
-}
-.prd-alert-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: prdDotPulse 2.5s ease-in-out infinite;
-}
-@keyframes prdDotPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .4; }
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 3px;
 }
 
 /* ═══ TOOLBAR ═══ */
@@ -827,15 +854,10 @@ const PRODUCAO_STYLES = `
 
 /* ═══ FACTORY GROUP ═══ */
 .prd-factory-group {
-  margin-bottom: 40px;
+  margin-bottom: 36px;
   opacity: 0;
   animation: prdFactoryIn .5s cubic-bezier(.2,.9,.3,1) forwards;
 }
-.prd-factory-group:nth-child(1) { animation-delay: 0s; }
-.prd-factory-group:nth-child(2) { animation-delay: .08s; }
-.prd-factory-group:nth-child(3) { animation-delay: .16s; }
-.prd-factory-group:nth-child(4) { animation-delay: .24s; }
-.prd-factory-group:nth-child(5) { animation-delay: .32s; }
 @keyframes prdFactoryIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: none; }
@@ -844,7 +866,7 @@ const PRODUCAO_STYLES = `
   display: flex;
   align-items: baseline;
   gap: 14px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   padding-bottom: 10px;
   position: relative;
   flex-wrap: wrap;
@@ -856,11 +878,7 @@ const PRODUCAO_STYLES = `
   width: 100%;
   height: 1px;
   background: var(--border);
-  transform: scaleX(0);
-  transform-origin: left;
-  animation: prdLineIn .7s cubic-bezier(.2,.9,.3,1) .2s forwards;
 }
-@keyframes prdLineIn { to { transform: scaleX(1); } }
 .prd-factory-name {
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 500;
@@ -880,24 +898,25 @@ const PRODUCAO_STYLES = `
   text-transform: uppercase;
   color: var(--text-muted);
 }
+.prd-factory-qty { color: var(--text); font-weight: 600; font-size: 11px; }
 .stuck-inline { color: var(--accent); font-weight: 600; }
 
 /* ═══ CARD GRID — 2 colunas ═══ */
 .prd-card-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
+  gap: 12px;
 }
 @media (max-width: 1100px) {
   .prd-card-grid { grid-template-columns: 1fr; }
 }
 
-/* ═══ PRODUCT CARD (denso, 2-col) ═══ */
+/* ═══ PRODUCT CARD (denso: foto 96px, peças em destaque) ═══ */
 .prd-product-card {
   display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 18px;
-  padding: 18px;
+  grid-template-columns: 96px 1fr;
+  gap: 14px;
+  padding: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -941,72 +960,16 @@ const PRODUCAO_STYLES = `
 .prd-photo-wrap img {
   width: 100%; height: 100%;
   object-fit: cover;
-  transition: transform .6s cubic-bezier(.2,.9,.3,1), opacity .35s;
+  transition: transform .6s cubic-bezier(.2,.9,.3,1);
 }
-.prd-product-card:hover .prd-photo-wrap img.primary {
-  transform: scale(1.05);
-}
-.prd-photo-wrap img.swap-in {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  transform: scale(1.08);
-}
-.prd-photo-wrap.swapped img.primary {
-  opacity: 0;
-  transform: scale(1.08);
-}
-.prd-photo-wrap.swapped img.swap-in {
-  opacity: 1;
-  transform: scale(1);
-}
+.prd-product-card:hover .prd-photo-wrap img { transform: scale(1.05); }
 .prd-photo-placeholder {
   width: 100%; height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
+  font-size: 30px;
   opacity: .3;
-}
-.prd-photo-zoom-hint {
-  position: absolute;
-  top: 6px; right: 6px;
-  width: 24px; height: 24px;
-  background: rgba(0,0,0,.5);
-  color: #fff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  opacity: 0;
-  transition: opacity .2s;
-  backdrop-filter: blur(4px);
-  pointer-events: none;
-}
-.prd-photo-wrap:hover .prd-photo-zoom-hint { opacity: 1; }
-
-/* Badge de "sem pedido" no canto da foto */
-.prd-photo-badge {
-  position: absolute;
-  top: 6px; left: 6px;
-  background: var(--accent);
-  color: #fff;
-  padding: 3px 8px 3px 6px;
-  border-radius: 10px;
-  font-family: 'DM Mono', ui-monospace, monospace;
-  font-size: 10px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  box-shadow: 0 2px 6px rgba(198,168,108,.35);
-}
-.prd-badge-dot {
-  width: 5px; height: 5px;
-  border-radius: 50%;
-  background: #fff;
-  animation: prdDotPulse 2.5s ease-in-out infinite;
 }
 
 /* Info col */
@@ -1014,24 +977,45 @@ const PRODUCAO_STYLES = `
   display: flex;
   flex-direction: column;
   min-width: 0;
+  gap: 8px;
+}
+.prd-prod-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 .prd-prod-name {
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 500;
-  font-size: 22px;
+  font-size: 19px;
   line-height: 1.1;
   letter-spacing: -0.015em;
   color: var(--text);
-  margin: 0 0 4px;
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.prd-prod-total {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.prd-prod-total small {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: .75;
+}
+.prd-prod-total.zero { color: var(--text-muted); font-weight: 400; }
 .prd-prod-meta {
   font-size: 11px;
   color: var(--text-muted);
-  margin-bottom: 14px;
-  letter-spacing: 0.01em;
-  min-height: 16px;
+  margin-top: -4px;
 }
 .prd-collection {
   color: var(--text-secondary);
@@ -1039,120 +1023,125 @@ const PRODUCAO_STYLES = `
   font-family: 'Fraunces', Georgia, serif;
   font-size: 12px;
 }
-.prd-swatches-label {
-  font-family: 'DM Mono', ui-monospace, monospace;
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.prd-stuck-count {
-  color: var(--accent);
-  font-weight: 600;
-}
 
-/* Swatches */
-.prd-swatches-row {
+/* ═══ PILLS de cor com quantidade (produção + trânsito) ═══ */
+.prd-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 5px;
 }
-.prd-swatch {
-  width: 52px;
-  display: flex;
-  flex-direction: column;
+.prd-pill {
+  display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 3px 8px 3px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
   cursor: zoom-in;
-  position: relative;
+  transition: transform .15s, border-color .15s;
 }
-.prd-swatch-circle {
-  width: 42px; height: 42px;
+.prd-pill:hover {
+  transform: scale(1.04);
+  border-color: var(--accent);
+}
+.prd-pill-dot {
+  width: 20px; height: 20px;
   border-radius: 50%;
   overflow: hidden;
+  flex-shrink: 0;
   border: 1px solid rgba(0,0,0,.06);
-  position: relative;
-  transition: transform .3s cubic-bezier(.2,.9,.3,1), box-shadow .3s;
-  background: var(--border-light);
+  display: inline-flex;
 }
-[data-theme="dark"] .prd-swatch-circle {
-  border-color: rgba(255,255,255,.08);
-}
-.prd-swatch-circle img {
+[data-theme="dark"] .prd-pill-dot { border-color: rgba(255,255,255,.08); }
+.prd-pill-dot img {
   width: 100%; height: 100%;
   object-fit: cover;
-  transition: transform .5s ease;
 }
-.prd-swatch:hover .prd-swatch-circle {
-  transform: translateY(-3px) scale(1.12);
-  box-shadow: 0 8px 18px rgba(74,25,66,.16);
-}
-.prd-swatch:hover .prd-swatch-circle img {
-  transform: scale(1.1);
-}
-.prd-swatch.stuck .prd-swatch-circle {
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent);
-  animation: prdSwatchPulse 3s ease-in-out infinite;
-}
-.prd-swatch.stuck:hover .prd-swatch-circle {
-  animation: none;
-  box-shadow: 0 8px 18px rgba(198,168,108,.3), 0 0 0 2px var(--surface), 0 0 0 3px var(--accent);
-  transform: translateY(-3px) scale(1.12);
-}
-@keyframes prdSwatchPulse {
-  0%, 100% { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
-  50% { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent), 0 0 0 6px rgba(198,168,108,.18); }
-}
-.prd-swatch-code {
+.prd-pill-code {
   font-family: 'DM Mono', ui-monospace, monospace;
-  font-size: 9px;
-  color: var(--text);
   letter-spacing: 0.02em;
-  text-align: center;
-  max-width: 52px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color .2s;
 }
-.prd-swatch:hover .prd-swatch-code { color: var(--accent); }
-
-/* Tooltip */
-.prd-swatch-tip {
-  position: absolute;
-  bottom: -28px;
-  left: 50%;
-  transform: translateX(-50%) translateY(6px) scale(.8);
+.prd-pill-qty {
   background: var(--text);
   color: var(--bg);
-  padding: 3px 9px;
-  border-radius: 10px;
-  font-size: 9px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .2s, transform .3s cubic-bezier(.2,1.6,.3,1);
-  z-index: 10;
+  padding: 1px 7px;
+  border-radius: 8px;
   font-family: 'DM Mono', ui-monospace, monospace;
-  letter-spacing: 0.02em;
-  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  font-size: 10px;
+  font-weight: 600;
 }
-.prd-swatch:hover .prd-swatch-tip {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0) scale(1);
+.prd-pill.stuck {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  animation: prdStuckPulse 3s ease-in-out infinite;
 }
-.prd-swatch-tip::before {
-  content: '';
-  position: absolute;
-  top: -3px;
-  left: 50%;
-  transform: translateX(-50%) rotate(45deg);
-  width: 6px; height: 6px;
-  background: var(--text);
+.prd-pill-warn {
+  color: var(--accent);
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+@keyframes prdStuckPulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--accent); }
+  50% { box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px rgba(198,168,108,.14); }
+}
+
+/* ═══ CHIPS de pedido vinculado ═══ */
+.prd-order-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+.prd-order-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  font-size: 10.5px;
+  font-family: inherit;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+}
+.prd-order-chip:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--text);
+}
+.prd-order-chip.late { border-color: #DC2626; }
+.prd-order-chip.none {
+  cursor: default;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.prd-chip-eta {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.prd-chip-late {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  color: #DC2626;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* ═══ TRANSIT CARD ═══ */
@@ -1198,6 +1187,20 @@ const PRODUCAO_STYLES = `
   color: var(--text);
   margin: 0;
 }
+.prd-transit-name h3.clickable { cursor: pointer; }
+.prd-transit-name h3.clickable:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.prd-eta-badge {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--accent-light);
+  color: var(--text);
+}
+.prd-eta-badge.soon { background: #FEF3C7; color: #92400E; }
+.prd-eta-badge.late { background: #FEE2E2; color: #991B1B; }
 .prd-transit-meta {
   font-size: 11px;
   color: var(--text-muted);
@@ -1206,6 +1209,7 @@ const PRODUCAO_STYLES = `
   flex-wrap: wrap;
   align-items: center;
 }
+.prd-transit-meta strong { color: var(--text); }
 .prd-meta-sep {
   color: var(--text-muted);
   opacity: .5;
@@ -1266,54 +1270,6 @@ const PRODUCAO_STYLES = `
   font-weight: 400;
   margin-left: 6px;
 }
-.prd-transit-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.prd-transit-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px 3px 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text);
-  cursor: zoom-in;
-  transition: transform .15s, border-color .15s;
-}
-.prd-transit-pill:hover {
-  transform: scale(1.03);
-  border-color: var(--accent);
-}
-.prd-transit-pill-dot {
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  overflow: hidden;
-  flex-shrink: 0;
-  border: 1px solid rgba(0,0,0,.06);
-  display: inline-flex;
-}
-.prd-transit-pill-dot img {
-  width: 100%; height: 100%;
-  object-fit: cover;
-}
-.prd-transit-pill-code {
-  font-family: 'DM Mono', ui-monospace, monospace;
-  letter-spacing: 0.02em;
-}
-.prd-transit-pill-qty {
-  background: var(--accent);
-  color: #fff;
-  padding: 1px 6px;
-  border-radius: 7px;
-  font-family: 'DM Mono', ui-monospace, monospace;
-  font-size: 9px;
-  font-weight: 600;
-}
 
 /* Empty state */
 .prd-empty {
@@ -1345,11 +1301,13 @@ const PRODUCAO_STYLES = `
 /* Responsivo pequeno */
 @media (max-width: 640px) {
   .prd-product-card {
-    grid-template-columns: 110px 1fr;
-    padding: 14px;
-    gap: 14px;
+    grid-template-columns: 80px 1fr;
+    padding: 12px;
+    gap: 12px;
   }
-  .prd-prod-name { font-size: 18px; }
+  .prd-prod-name { font-size: 16px; }
   .prd-title-compact { font-size: 26px; }
+  .prd-kpis { gap: 16px; }
+  .prd-kpi-val { font-size: 19px; }
 }
 `

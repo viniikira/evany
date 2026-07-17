@@ -1,23 +1,31 @@
-# KIRA v13.60 — Pacote de costura (UX): o sistema te LEVA, não só avisa
+# KIRA v13.61 — Produção: mega revisão (peças em primeiro lugar)
 
-Rodada sem feature nova — só costuras entre partes que estavam desconexas, a partir de uma auditoria fria da experiência.
+Do feedback: "não dá pra saber quantas peças estão em produção, atrelado a qual produto; espaço mal utilizado; não está lógico".
 
-## 🧵 As costuras
+## 🏭 O que mudou
 
-1. **Avisos agora abrem o item.** O sino 🔔 de pendências e os cards de "Atenções" do Dashboard abriam só a página — você tinha que caçar o pedido na lista. Agora clicar em "pedido X atrasado" abre **o pedido X**, direto no detalhe (mesmo caminho da busca global e dos deep-links).
-2. **Salvou o pedido → ele abre.** Depois de salvar na mesa de criação, o detalhe do pedido salvo abre sozinho — exportar a planilha ou mudar o status vira o próximo clique natural, sem reencontrar o card.
-3. **"Duplicar" unificado com "Reaproveitar".** Eram dois comportamentos pra mesma ideia: um criava rascunho silencioso no banco, o outro abria a mesa pré-carregada. Agora o 📋 Duplicar **abre a mesa de criação pré-carregada** (fábrica, itens, cores, preços, requeriments) — nada é criado até você salvar. Pagamentos e histórico nunca vêm junto.
-4. **Menu agrupado**: 16 itens planos viraram três seções — **Operação** (Ideias→Calculadoras), **Cadastros** (Cores, Nomes, Coleções, Fábricas) e **Administração** (Atividades, Métricas, Backup, Usuários).
-5. **Dado velho não finge ser atual**: no modal de Produto, se o cache da Shopify tiver mais de 7 dias, aparece o aviso "dados de N dias atrás — atualize na aba Shopify" junto das sugestões de SKU/estoque.
-6. **Cores sem foto ficaram visíveis**: chip "📷 Sem foto (N)" na tela Cores filtra direto as que estragariam a planilha da fábrica.
-7. Miudezas: "📄 PDF" virou "📄 PDF interno" (pra não confundir com a planilha da fábrica), ícone do status "Em Revisão" unificado (o criador mostrava 📨, o resto 🔍), e o aviso de "outra aba aberta" ficou explicativo (navegar em várias abas é ok; só evite editar o mesmo item em duas).
+**A pergunta nº1 agora tem resposta em todo nível:**
+- **KPIs no topo**: peças em produção · produtos · cores (com ⚠ das sem pedido) · peças em trânsito · próxima chegada.
+- **Por produto**: o total de peças aparece grande ao lado do nome ("ALICE — 70 pç").
+- **Por cor**: cada cor virou uma pill `[foto] 2 ×50` com a quantidade somada dos pedidos ativos. Cor em produção **sem pedido** ganha pill destacada "sem pedido".
+- **Por fábrica**: o cabeçalho do grupo mostra "480 peças · 10 produtos · 19 cores".
+- As **abas** contam peças ("Em produção 105 pç · Em trânsito 40 pç"), não mais cores.
+
+**Vínculo com pedidos (o "atrelado a qual" que faltava):**
+- Cada produto mostra chips dos **pedidos ativos** que o contêm: "📋 Novembro 2025 · chega 10/08" ou "📋 … · **atrasado 47d**" — e o chip **abre o pedido** (mesma infra dos deep-links).
+- Na aba Trânsito, o nome do pedido é clicável e ganhou badge "**chega em Nd**" (âmbar ≤7d, vermelho se a previsão já passou).
+
+**Espaço bem usado:**
+- Foto do produto encolheu de 160px pra 96px (era arte de marketing dominando o card) — os cards ficaram ~metade da altura, com o dobro de informação.
+- Ordenação padrão nova: **Mais peças** (o que é grande aparece primeiro).
+- Matching de cor ↔ pedido agora é **case-insensitive** (antes "r4/33/27" no pedido não casava com "R4/33/27" do produto e a quantidade sumia).
 
 ## ✅ Verificações
 
-- Duplicar verificado no navegador: abre direto na mesa (etapa 2) como pedido NOVO, itens/qtd/requeriments/preço-snapshot preservados, e o payload salvo **sem id e sem pagamentos** (confirmado no console)
+- Testado no navegador com dados realistas: KPIs corretos (105 pç = 50+20+35), matching case-insensitive somando certo, cor presa marcada (1⚠), chip de pedido com "atrasado 47d" exato (107 corridos − 60 prometidos) e clique abrindo o pedido, trânsito com "chega em 3d"
 - ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso)
 
 ## 📋 Pendências do usuário (seguem valendo)
 
 - Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase
-- Na fila estratégica: **sync automático noturno da Shopify** (mata a raiz do dado velho)
+- Fila estratégica: **sync automático noturno da Shopify** · conferência de recebimento
