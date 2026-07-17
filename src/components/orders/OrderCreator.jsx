@@ -96,6 +96,7 @@ export function OrderCreator({ order = null, factories, products, ideas = [], co
         idea_id: null,
         idea_name_snapshot: null,
         price_usd: it.price_usd_snapshot ?? it.price_usd ?? '',
+        requirements: it.requirements || '',
         colors: (it.colors || []).filter(c => c && c.code).map(c => ({
           code: c.code,
           qty: Number(c.qty) || 0,
@@ -150,6 +151,7 @@ export function OrderCreator({ order = null, factories, products, ideas = [], co
           : (!isIdea && intelByProduct.get(source.id)?.price?.lastPrice != null
               ? intelByProduct.get(source.id).price.lastPrice
               : ''),
+        requirements: '',  // v13.58 — texto pra fábrica na planilha (por modelo)
         colors: [],
       }],
     }))
@@ -599,6 +601,19 @@ export function OrderCreator({ order = null, factories, products, ideas = [], co
                       <button className="btn-icon text-danger" onClick={() => rmItem(it.id)} title="Remover modelo do pedido" aria-label="Remover modelo do pedido">✕</button>
                     </div>
 
+                    {/* v13.58 — Requeriments pra fábrica (vai na planilha, por modelo) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
+                      <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: .5, color: 'var(--text-muted, #6b7280)', whiteSpace: 'nowrap' }}>📝 Requeriments</span>
+                      <input
+                        className="field field-sm"
+                        style={{ flex: 1, fontSize: 12 }}
+                        placeholder="pra fábrica — ex: hd lace, same hairline, no baby hair, elastic band"
+                        value={it.requirements || ''}
+                        onChange={e => updItem(it.id, 'requirements', e.target.value)}
+                        title="Instruções deste modelo — sai na coluna Requeriments da planilha da fábrica"
+                      />
+                    </div>
+
                     {/* Galeria de cores */}
                     <div style={{ padding: 12, borderBottom: (it.colors || []).length > 0 ? '1px solid var(--border)' : 'none' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10 }}>
@@ -871,8 +886,11 @@ export function OrderCreator({ order = null, factories, products, ideas = [], co
             </div>
 
             <div className="form-group" style={{ marginTop: 12 }}>
-              <label className="field-label">Observações</label>
-              <textarea className="field" value={f.notes} onChange={e => s('notes', e.target.value)} placeholder="Ex: same as sample, detalhes de acabamento..." />
+              <label className="field-label">
+                Aviso geral do pedido
+                <span className="text-muted text-xs" style={{ marginLeft: 6, fontWeight: 400 }}>— sai como banner amarelo no topo da planilha da fábrica</span>
+              </label>
+              <textarea className="field" value={f.notes} onChange={e => s('notes', e.target.value)} placeholder="Ex: Our products fiber cant SHINE! All products should have the combs in the cap" />
             </div>
           </div>
         )}

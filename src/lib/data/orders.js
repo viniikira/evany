@@ -86,6 +86,7 @@ export function buildDuplicateOrderPayload(sourceOrder, newOrderName) {
     quantity: it.quantity || 0,
     price_usd: it.price_usd || null,
     price_usd_snapshot: it.price_usd_snapshot || null,
+    requirements: it.requirements || null,
     colors: (it.colors || []).map(c => ({
       code: c.code || '',
       qty: c.qty || 0,
@@ -292,6 +293,7 @@ async function replaceOrderItems(orderId, items) {
       quantity: String(qty),
       price_usd: price != null ? String(price) : null,
       price_usd_snapshot: priceSnapshot != null ? String(priceSnapshot) : null,
+      requirements: sanitizeTxt(it.requirements),  // v13.58 — texto pra fábrica na planilha
       colors,
     }
   })
