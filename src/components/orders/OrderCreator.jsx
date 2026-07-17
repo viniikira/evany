@@ -24,24 +24,43 @@ import { uid, UC, formatDate } from '../../lib/utils'
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
 
-export function OrderCreator({ order = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose }) {
+// Copia os itens de um pedido existente pra um rascunho novo — usado tanto
+// pelo "reaproveitar" da etapa 1 quanto pelo "Duplicar" do detalhe (v13.60,
+// unificados: nada é criado no banco até salvar).
+const itemsFromOrder = (src) => (src?.items || []).map(it => ({
+  id: 'tmp-' + uid(),
+  product_id: it.product_id || '',
+  idea_id: null,
+  idea_name_snapshot: null,
+  price_usd: it.price_usd_snapshot ?? it.price_usd ?? '',
+  requirements: it.requirements || '',
+  colors: (it.colors || []).filter(c => c && c.code).map(c => ({
+    code: c.code,
+    qty: Number(c.qty) || 0,
+    price_usd: c.price_usd ?? null,
+    _fromProduct: true,
+  })),
+}))
+
+export function OrderCreator({ order = null, prefill = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose }) {
   const confirm = useConfirm()
   const toast = useToast()
   const isEdit = !!(order && order.id)
-  // Editando, a fábrica já existe — abre direto na mesa de criação
-  const [step, setStep] = useState(isEdit ? 2 : 1)
+  // Editando ou duplicando, a fábrica já existe — abre direto na mesa de criação
+  const [step, setStep] = useState(isEdit || prefill ? 2 : 1)
   const [exportingSheet, setExportingSheet] = useState(false)
   const [f, setF] = useState(() => {
     if (!isEdit) {
       return {
         order_name: '',
-        factory: '',
+        // v13.60 — duplicando: parte da fábrica/itens do pedido de origem
+        factory: prefill?.factory || '',
         status: 'draft',
-        notes: '',
+        notes: prefill?.notes || '',
         expected_arrival: null,
         order_date: null,
         promised_lead_days: null,
-        items: [],
+        items: prefill ? itemsFromOrder(prefill) : [],
       }
     }
     // Edição: parte do pedido real. O spread preserva campos que o form não
@@ -90,20 +109,7 @@ export function OrderCreator({ order = null, factories, products, ideas = [], co
     setF(prev => ({
       ...prev,
       factory: src.factory || prev.factory,
-      items: (src.items || []).map(it => ({
-        id: 'tmp-' + uid(),
-        product_id: it.product_id || '',
-        idea_id: null,
-        idea_name_snapshot: null,
-        price_usd: it.price_usd_snapshot ?? it.price_usd ?? '',
-        requirements: it.requirements || '',
-        colors: (it.colors || []).filter(c => c && c.code).map(c => ({
-          code: c.code,
-          qty: Number(c.qty) || 0,
-          price_usd: c.price_usd ?? null,
-          _fromProduct: true,
-        })),
-      })),
+      items: itemsFromOrder(src),
     }))
     setStep(2)
   }
@@ -819,12 +825,9 @@ export function OrderCreator({ order = null, factories, products, ideas = [], co
               <div className="form-group">
                 <label className="field-label">{isEdit ? 'Status' : 'Status inicial'}</label>
                 <select className="field" value={f.status} onChange={e => s('status', e.target.value)}>
-                  {isEdit
-                    ? ORDER_ST.map(x => <option key={x.id} value={x.id}>{x.icon} {x.label}</option>)
-                    : (<>
-                        <option value="draft">📝 Rascunho</option>
-                        <option value="sent">📨 Em Revisão</option>
-                      </>)}
+                  {/* v13.60 — ícones vêm do ORDER_ST (o 📨 hardcoded divergia do resto do app) */}
+                  {(isEdit ? ORDER_ST : ORDER_ST.filter(x => x.id === 'draft' || x.id === 'sent'))
+                    .map(x => <option key={x.id} value={x.id}>{x.icon} {x.label}</option>)}
                 </select>
               </div>
               <div className="form-group">

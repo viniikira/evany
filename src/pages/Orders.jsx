@@ -12,7 +12,6 @@ import {
   listOrders, createOrder, updateOrder, deleteOrder, updateOrderStatus,
   addPayment, updatePayment, deletePayment,
   listDeletedOrders, restoreOrder, purgeOrderPermanently,
-  duplicateOrder,
 } from '../lib/data/orders'
 import { listProducts, bulkUpdateColorStatus, updateProductStatus } from '../lib/data/products'
 import { listFactories, listColors, addLog as writeLog } from '../lib/data/misc'
@@ -37,10 +36,17 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
   const [colors, setColors] = useState([])
   const [loading, setLoading] = useState(initialData.length === 0)
   const [filter, setFilter] = useStickyFilter('orders.filter', 'all')
-  // v13.54 — Criador visual (tela cheia) pra pedidos novos E edição:
-  // null fechado · 'new' pedido novo · objeto = pedido sendo editado.
-  // O OrderModal clássico saiu de cena.
+  // v13.54 — Criador visual (tela cheia) pra pedidos novos E edição.
+  // v13.60 — shape: null fechado · {} novo · {order} editando · {prefill} duplicando.
   const [creator, setCreator] = useState(null)
+  // v13.60 — pós-salvar abre o pedido salvo (continuidade: exportar/mudar status)
+  const [openAfterSave, setOpenAfterSave] = useState(null)
+  useEffect(() => {
+    if (!openAfterSave || orders.length === 0) return
+    const target = orders.find(o => o.id === openAfterSave)
+    if (target) setDetail(target)
+    setOpenAfterSave(null)
+  }, [openAfterSave, orders])
   const [detail, setDetail] = useState(null)
   // #B Modal pós-conclusão: aparece quando pedido vira "Concluído"
   // mostrando resumo do que o sistema fez automaticamente
@@ -299,10 +305,13 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         const created = await createOrder({ ...order, created_by: user.id })
         writeLog({ userId: user.id, userName: user.name, action: 'criou pedido', target: order.order_name || order.factory, entityType: 'order', entityId: created.id })
         trackAction('create_order', { factory: order.factory, items_count: (order.items || []).length })
+        // v13.60 — continuidade: depois do load(), abre o pedido recém-salvo
+        setOpenAfterSave(created.id)
       } else {
         await updateOrder(order.id, order)
         writeLog({ userId: user.id, userName: user.name, action: 'editou pedido', target: order.order_name || order.factory, entityType: 'order', entityId: order.id })
         trackAction('update_order', { factory: order.factory })
+        setOpenAfterSave(order.id)
       }
       
       // Aplicar updates de fábrica nos produtos (após o pedido salvar)
@@ -389,30 +398,12 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
     } catch (e) { toastError(toast, e) }
   }
 
-  // v13.23 Duplica pedido — cria rascunho com items copiados (sem payments/timeline)
-  const handleDuplicate = async (o) => {
-    const defaultName = `${o.order_name || o.factory} (cópia)`
-    const newName = prompt('Nome do novo pedido:', defaultName)
-    if (newName === null) return  // cancelou
-    const trimmed = newName.trim() || defaultName
-    
-    try {
-      const created = await duplicateOrder(o, trimmed)
-      writeLog({
-        userId: user.id, userName: user.name,
-        action: 'duplicou pedido',
-        target: trimmed,
-        details: `Origem: ${o.order_name || o.factory}`,
-        entityType: 'order', entityId: created.id,
-      })
-      setDetail(null)
-      await load()
-      onMutate?.()
-      // Abre o novo pedido em modo edição direto (UX: usuário acabou de duplicar, quer revisar)
-      const newOrder = (await listOrders()).find(x => x.id === created.id)
-      if (newOrder) setDetail(newOrder)
-      toast.push(`✓ Pedido duplicado como "${trimmed}" (rascunho)`, { kind: 'success', duration: 5000 })
-    } catch (e) { toastError(toast, e) }
+  // v13.60 — Duplicar UNIFICADO com o "reaproveitar": abre a mesa de criação
+  // pré-carregada (nada é criado no banco até salvar). Antes criava um rascunho
+  // silencioso direto — dois comportamentos pra mesma ideia confundiam.
+  const handleDuplicate = (o) => {
+    setDetail(null)
+    setCreator({ prefill: o })
   }
 
   // #18 Restaurar pedido da lixeira (volta pra lista ativa)
@@ -791,7 +782,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
           onClear={() => clearStickyFilters('orders')}
         />
       </div>
-      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator('new')}>+ Novo Pedido</button>}
+      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo Pedido</button>}
     </div>
 
     {/* Banner informativo quando vendo lixeira */}
@@ -914,7 +905,8 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
 
     {creator && (
       <OrderCreator
-        order={creator === 'new' ? null : creator}
+        order={creator.order || null}
+        prefill={creator.prefill || null}
         factories={factories}
         products={products}
         ideas={ideas}
@@ -936,7 +928,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         rate={rate}
         user={user}
         onClose={() => setDetail(null)}
-        onEdit={() => { setCreator(detail); setDetail(null) }}
+        onEdit={() => { setCreator({ order: detail }); setDetail(null) }}
         onDelete={() => remove(detail)}
         onStatus={s => changeStatus(detail, s)}
         onRefresh={load}

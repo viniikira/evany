@@ -21,7 +21,7 @@ import { computeAttentions, findStuckColors } from '../lib/dashboardInsights'
 
 export default function Dashboard({
   ideas, products, orders, names, colors, logs, shopifyCache, perm, setPage,
-  rate, userName,
+  onOpenTarget, rate, userName,
 }) {
   const [colorModal, setColorModal] = useState(null)
   // v13.44 — Modo Foco: persiste em localStorage pra manter preferência entre sessões
@@ -277,7 +277,7 @@ export default function Dashboard({
             gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
             gap: 10,
           }}>
-            {attentions.visible.map(a => <AttentionCard key={a.id} attention={a} setPage={setPage} />)}
+            {attentions.visible.map(a => <AttentionCard key={a.id} attention={a} setPage={setPage} onOpenTarget={onOpenTarget} />)}
           </div>
         </div>
       )}
@@ -666,7 +666,7 @@ function FavoritesStrip({ items, setPage }) {
 // ═══════════════════════════════════════════════════════════════════
 // CARD DE ATENÇÃO (zona HOJE)
 // ═══════════════════════════════════════════════════════════════════
-function AttentionCard({ attention: a, setPage }) {
+function AttentionCard({ attention: a, setPage, onOpenTarget }) {
   const sevColors = {
     critical: { border: '#DC2626', bg: '#FEF2F2', text: '#991B1B', accent: '#DC2626' },
     warning:  { border: '#F59E0B', bg: '#FFFBEB', text: '#78350F', accent: '#F59E0B' },
@@ -684,7 +684,11 @@ function AttentionCard({ attention: a, setPage }) {
           setPage('producao')
           return
         }
-        if (a.target?.page) setPage(a.target.page)
+        // v13.60 — abre o ITEM direto (pedido/produto), não só a página
+        if (a.target?.page) {
+          if (onOpenTarget) onOpenTarget(a.target)
+          else setPage(a.target.page)
+        }
       }}
       style={{
         background: c.bg,

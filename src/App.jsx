@@ -263,23 +263,24 @@ function AppCore() {
     }
   }
 
+  // v13.60 — menu agrupado em seções (16 itens planos viravam sopa)
   const nav = [
     { id: 'dashboard', label: 'Dashboard', icon: '📊', show: true },
-    { id: 'ideas', label: 'Ideias', icon: '💡', show: perm.ideas, badge: ideasNewCount, badgeColor: '#0891B2', badgeTitle: 'Ideias novas nos últimos 7 dias' },
-    { id: 'products', label: 'Produtos', icon: '👑', show: perm.products },
-    { id: 'producao', label: 'Produção', icon: '🏭', show: perm.products, badge: productionColorsCount, badgeColor: '#F59E0B', badgeTitle: 'Cores em produção + em trânsito' },
-    { id: 'orders', label: 'Pedidos', icon: '📋', show: perm.orders, badge: ordersPendingCount, badgeColor: '#F59E0B', badgeTitle: 'Pedidos precisando de atenção' },
-    { id: 'financial', label: 'Financeiro', icon: '💰', show: perm.prices },
-    { id: 'shopify', label: 'Shopify', icon: '🛒', show: perm.shopify },
-    { id: 'calculator', label: 'Calculadoras', icon: '🧮', show: perm.prices },
-    { id: 'names', label: 'Nomes', icon: '✨', show: perm.names },
-    { id: 'collections', label: 'Coleções', icon: '🏷️', show: perm.collections },
-    { id: 'factories', label: 'Fábricas', icon: '🏭', show: perm.factories },
-    { id: 'colors', label: 'Cores', icon: '🎨', show: perm.colors },
-    { id: 'logs', label: 'Atividades', icon: '📜', show: perm.logs },
-    { id: 'analytics', label: 'Métricas', icon: '📈', show: perm.admin },
-    { id: 'backup', label: 'Backup', icon: '🛡️', show: perm.backup },
-    { id: 'users', label: 'Usuários', icon: '👤', show: perm.users },
+    { id: 'ideas', label: 'Ideias', icon: '💡', show: perm.ideas, badge: ideasNewCount, badgeColor: '#0891B2', badgeTitle: 'Ideias novas nos últimos 7 dias', section: 'Operação' },
+    { id: 'products', label: 'Produtos', icon: '👑', show: perm.products, section: 'Operação' },
+    { id: 'producao', label: 'Produção', icon: '🏭', show: perm.products, badge: productionColorsCount, badgeColor: '#F59E0B', badgeTitle: 'Cores em produção + em trânsito', section: 'Operação' },
+    { id: 'orders', label: 'Pedidos', icon: '📋', show: perm.orders, badge: ordersPendingCount, badgeColor: '#F59E0B', badgeTitle: 'Pedidos precisando de atenção', section: 'Operação' },
+    { id: 'financial', label: 'Financeiro', icon: '💰', show: perm.prices, section: 'Operação' },
+    { id: 'shopify', label: 'Shopify', icon: '🛒', show: perm.shopify, section: 'Operação' },
+    { id: 'calculator', label: 'Calculadoras', icon: '🧮', show: perm.prices, section: 'Operação' },
+    { id: 'colors', label: 'Cores', icon: '🎨', show: perm.colors, section: 'Cadastros' },
+    { id: 'names', label: 'Nomes', icon: '✨', show: perm.names, section: 'Cadastros' },
+    { id: 'collections', label: 'Coleções', icon: '🏷️', show: perm.collections, section: 'Cadastros' },
+    { id: 'factories', label: 'Fábricas', icon: '🏭', show: perm.factories, section: 'Cadastros' },
+    { id: 'logs', label: 'Atividades', icon: '📜', show: perm.logs, section: 'Administração' },
+    { id: 'analytics', label: 'Métricas', icon: '📈', show: perm.admin, section: 'Administração' },
+    { id: 'backup', label: 'Backup', icon: '🛡️', show: perm.backup, section: 'Administração' },
+    { id: 'users', label: 'Usuários', icon: '👤', show: perm.users, section: 'Administração' },
   ].filter(n => n.show)
 
   const titles = {
@@ -360,9 +361,16 @@ function AppCore() {
           </div>
         </div>
         <nav className="side-nav">
-          {nav.map(it => (
+          {nav.map((it, idx) => (
+            <span key={it.id} style={{ display: 'contents' }}>
+            {it.section && nav[idx - 1]?.section !== it.section && (
+              <div style={{
+                padding: '10px 14px 4px', fontSize: 10, fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: 1,
+                color: 'var(--text-muted, #9CA3AF)', opacity: .8,
+              }}>{it.section}</div>
+            )}
             <button
-              key={it.id}
               className={`nav-btn${page === it.id ? ' active' : ''}`}
               onClick={() => {
                 setPage(it.id)
@@ -387,6 +395,7 @@ function AppCore() {
                 </span>
               )}
             </button>
+            </span>
           ))}
         </nav>
         <div className="side-ft">
@@ -415,7 +424,7 @@ function AppCore() {
                 className="chip"
                 style={{ background: '#FEF3C7', color: '#92400E', cursor: 'pointer', border: '1px solid #FBBF24', padding: '4px 10px', fontSize: 11 }}
                 onClick={claimActive}
-                title="Clique para usar esta aba e desativar as outras"
+                title="Outra aba do sistema também está aberta — tudo bem pra navegar/consultar; só evite EDITAR o mesmo item nas duas. Clique pra tornar esta a aba principal."
               >
                 ⚠️ Outra aba ativa — clique pra usar esta
               </button>
@@ -430,6 +439,12 @@ function AppCore() {
               {...dashData}
               perm={perm}
               setPage={setPage}
+              onOpenTarget={(t) => {
+                // v13.60 — cards de atenção abrem o ITEM, não só a página
+                if (t?.page === 'orders' && t.id) setPendingOpenOrderId(t.id)
+                if (t?.page === 'products' && t.id) setPendingOpenProductId(t.id)
+                if (t?.page) setPage(t.page)
+              }}
               rate={rate}
               userName={profile?.name}
             />
@@ -470,10 +485,15 @@ function AppCore() {
         pendencias={pendencias}
         onClose={() => setPendDrawerOpen(false)}
         onPendenciaClick={(p) => {
-          // Navega pra página apropriada baseado no tipo de target
-          if (p.target?.type === 'order') setPage('orders')
-          else if (p.target?.type === 'product') setPage('products')
-          else if (p.target?.type === 'idea') setPage('ideas')
+          // v13.60 — o aviso agora LEVA no item: abre o detalhe direto,
+          // não só a página (mesmo caminho do deep-link/busca global)
+          if (p.target?.type === 'order') {
+            if (p.target.id) setPendingOpenOrderId(p.target.id)
+            setPage('orders')
+          } else if (p.target?.type === 'product') {
+            if (p.target.id) setPendingOpenProductId(p.target.id)
+            setPage('products')
+          } else if (p.target?.type === 'idea') setPage('ideas')
           setPendDrawerOpen(false)
         }}
       />

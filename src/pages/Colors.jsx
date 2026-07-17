@@ -23,6 +23,8 @@ export function ColorsPage({ user, perm }) {
   const [loading, setLoading] = useState(true)
   const [newCode, setNewCode] = useState('')
   const [search, setSearch] = useState('')  // #8 buscador
+  // v13.60 — cores sem foto eram invisíveis até estragarem uma planilha da fábrica
+  const [noPhotoOnly, setNoPhotoOnly] = useState(false)
   const [activeCategoryIds, setActiveCategoryIds] = useState([])  // #9 filtro multi categoria
   const [showCategoriesPanel, setShowCategoriesPanel] = useState(false)
   const [editingCategory, setEditingCategory] = useState(null)  // categoria sendo editada
@@ -343,6 +345,17 @@ export function ColorsPage({ user, perm }) {
         {search && (
           <button className="btn btn-outline btn-sm" onClick={() => setSearch('')}>Limpar</button>
         )}
+        {(() => {
+          const n = colors.filter(c => !c.photo_url).length
+          if (n === 0) return null
+          return (
+            <button
+              className={`chip-filter${noPhotoOnly ? ' on' : ''}`}
+              onClick={() => setNoPhotoOnly(v => !v)}
+              title="Cores sem foto saem como quadrado de cor sólida na planilha da fábrica — suba as fotos delas aqui"
+            >📷 Sem foto ({n})</button>
+          )
+        })()}
       </div>
     )}
     
@@ -362,7 +375,10 @@ export function ColorsPage({ user, perm }) {
           (c.category_ids || []).some(cid => activeCategoryIds.includes(cid))
         )
       }
-      const isFiltered = !!search.trim() || activeCategoryIds.length > 0
+      if (noPhotoOnly) {
+        filteredColors = filteredColors.filter(c => !c.photo_url)
+      }
+      const isFiltered = !!search.trim() || activeCategoryIds.length > 0 || noPhotoOnly
       
       if (loading) return <SkeletonList rows={4} />
       if (filteredColors.length === 0 && isFiltered) {

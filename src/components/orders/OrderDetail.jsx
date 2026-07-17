@@ -194,12 +194,12 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 title="Atualiza preços do pedido com base nos valores atuais do catálogo"
               >🔄 Recalcular FOB</button>
             )}
-            {/* v13.23 Duplicar pedido — disponível em qualquer status (cria rascunho novo) */}
+            {/* v13.60 — Duplicar unificado: abre a mesa de criação pré-carregada */}
             {perm.orders && !readOnly && onDuplicate && (
               <button
                 className="btn btn-outline btn-sm"
                 onClick={onDuplicate}
-                title="Cria um novo pedido em rascunho com os mesmos items"
+                title="Abre a mesa de criação pré-carregada com estes itens — nada é criado até você salvar"
               >📋 Duplicar</button>
             )}
             {/* v13.47 Planilha da fábrica — contém FOB, só pra quem vê preços */}
@@ -211,7 +211,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 title="Gera o Excel com fotos no formato enviado à fábrica (modelos, cores, quantidades, FOB e seção COLORS)"
               >{exportingSheet ? '⏳ Gerando...' : '📊 Planilha Fábrica'}</button>
             )}
-            <button className="btn btn-outline btn-sm" onClick={() => { trackAction('export_pdf', { orderId: o.id, factory: o.factory }); generateOrderPDF(o, products) }}>📄 PDF</button>
+            <button className="btn btn-outline btn-sm" onClick={() => { trackAction('export_pdf', { orderId: o.id, factory: o.factory }); generateOrderPDF(o, products) }} title="Documento interno de conferência (não é o que vai pra fábrica)">📄 PDF interno</button>
             {perm.orders && !readOnly ? <button className="btn btn-primary btn-sm" onClick={onEdit}>✏️ Editar</button> : null}
           </>
         } />

@@ -859,6 +859,16 @@ function ProductModal({ product, collections, factories, colors, names, existing
             <label className="field-label" style={{ margin: 0 }}>🎨 Variantes de Cor ({(f.color_variants || []).length})</label>
             <button className="btn btn-outline btn-sm" onClick={addCV}>+ Cor</button>
           </div>
+          {/* v13.60 — dado velho não pode fingir ser atual: idade do cache da Shopify */}
+          {shopifyIndex.length > 0 && shopifyCache?.last_sync && (() => {
+            const days = Math.floor((Date.now() - new Date(shopifyCache.last_sync)) / 86400000)
+            if (days <= 7) return null
+            return (
+              <div style={{ marginBottom: 8, fontSize: 11, padding: '5px 10px', borderRadius: 6, background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E' }}>
+                ⚠️ Sugestões e estoques da Shopify são da sincronização de <strong>{days} dias atrás</strong> — atualize na aba Shopify (botão Sync).
+              </div>
+            )
+          })()}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 6 }}>
             {(f.color_variants || []).map(cv => {
               const colorData = colors.find(c => c.code === cv.code)

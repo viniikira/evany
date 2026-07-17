@@ -1,20 +1,23 @@
-# KIRA v13.59 — Planilha da fábrica: layout consertado (fotos, textos, separadores)
+# KIRA v13.60 — Pacote de costura (UX): o sistema te LEVA, não só avisa
 
-Correções a partir do teste real da usuária no Google Sheets (fotos "bugadas", textos grandes estourando, blocos grudados).
+Rodada sem feature nova — só costuras entre partes que estavam desconexas, a partir de uma auditoria fria da experiência.
 
-## 🖼️ O que mudou
+## 🧵 As costuras
 
-1. **Fotos nunca mais distorcem.** Antes a imagem era ancorada pra "preencher a célula" — o Google Sheets estica/espreme isso. Agora toda foto entra em **tamanho fixo proporcional** (calculado da dimensão real da imagem). Foto alta sai alta, quadrada sai quadrada — em Excel E no Google Sheets.
-2. **Grade de 16 colunas uniformes + mesclagens** — o jeito que a sua planilha original é construída. Nome de cor grande ("#24B18S8 SHADED MOCHA", "BALAYAGE ASH BLONDE") tem ~213px de célula mesclada com quebra de linha, não estoura mais.
-3. **Faixa ROSA separando cada modelo** (como na original) + **cabeçalho repetido em cada bloco** (PHOTO | MODEL | CAP | COLOR | QUANTITY | Requeriments) — a fábrica entende cada seção sem adivinhar.
-4. Rótulos das cores em células duplas (~142px) com quebra; fotos das cores em caixas de 142×133px, 8 por linha.
+1. **Avisos agora abrem o item.** O sino 🔔 de pendências e os cards de "Atenções" do Dashboard abriam só a página — você tinha que caçar o pedido na lista. Agora clicar em "pedido X atrasado" abre **o pedido X**, direto no detalhe (mesmo caminho da busca global e dos deep-links).
+2. **Salvou o pedido → ele abre.** Depois de salvar na mesa de criação, o detalhe do pedido salvo abre sozinho — exportar a planilha ou mudar o status vira o próximo clique natural, sem reencontrar o card.
+3. **"Duplicar" unificado com "Reaproveitar".** Eram dois comportamentos pra mesma ideia: um criava rascunho silencioso no banco, o outro abria a mesa pré-carregada. Agora o 📋 Duplicar **abre a mesa de criação pré-carregada** (fábrica, itens, cores, preços, requeriments) — nada é criado até você salvar. Pagamentos e histórico nunca vêm junto.
+4. **Menu agrupado**: 16 itens planos viraram três seções — **Operação** (Ideias→Calculadoras), **Cadastros** (Cores, Nomes, Coleções, Fábricas) e **Administração** (Atividades, Métricas, Backup, Usuários).
+5. **Dado velho não finge ser atual**: no modal de Produto, se o cache da Shopify tiver mais de 7 dias, aparece o aviso "dados de N dias atrás — atualize na aba Shopify" junto das sugestões de SKU/estoque.
+6. **Cores sem foto ficaram visíveis**: chip "📷 Sem foto (N)" na tela Cores filtra direto as que estragariam a planilha da fábrica.
+7. Miudezas: "📄 PDF" virou "📄 PDF interno" (pra não confundir com a planilha da fábrica), ícone do status "Em Revisão" unificado (o criador mostrava 📨, o resto 🔍), e o aviso de "outra aba aberta" ficou explicativo (navegar em várias abas é ok; só evite editar o mesmo item em duas).
 
 ## ✅ Verificações
 
-- xlsx gerado e **reaberto com ExcelJS**: proporções conferidas imagem a imagem (foto-teste 120×400 saiu 38×126 — mesma razão, sem esticar; quadrada saiu 126×126), 2 faixas magenta (1 por modelo), cabeçalho nos 2 blocos, nomes grandes presentes, requeriments e aviso no lugar, 9 imagens, 39 mesclagens
-- ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso; a camada pura da planilha não mudou)
+- Duplicar verificado no navegador: abre direto na mesa (etapa 2) como pedido NOVO, itens/qtd/requeriments/preço-snapshot preservados, e o payload salvo **sem id e sem pagamentos** (confirmado no console)
+- ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso)
 
-## 📋 Rodadas anteriores (em produção)
+## 📋 Pendências do usuário (seguem valendo)
 
-- **v13.58** — formato sem valores + requeriments por modelo + aviso geral + COLORS por modelo + fix do snapshot de preço (sql/24).
-- Pendências do usuário: revogar token antigo da Shopify · ativar proteção de senha vazada no Supabase.
+- Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase
+- Na fila estratégica: **sync automático noturno da Shopify** (mata a raiz do dado velho)
