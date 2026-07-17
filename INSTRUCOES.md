@@ -1,28 +1,20 @@
-# KIRA v13.58 — Planilha da fábrica no formato REAL (sem valores) + fix de snapshot
+# KIRA v13.59 — Planilha da fábrica: layout consertado (fotos, textos, separadores)
 
-## 📊 A planilha da fábrica ficou igual à sua
+Correções a partir do teste real da usuária no Google Sheets (fotos "bugadas", textos grandes estourando, blocos grudados).
 
-Refeita com base na planilha real do Google Sheets:
+## 🖼️ O que mudou
 
-- **SEM valores.** FOB, TOTAL PRICE, PP e BRL saíram — isso é controle interno seu (continua no Financeiro do sistema). A fábrica recebe só o que precisa.
-- **Aviso geral do pedido** no topo: banner amarelo com texto vermelho (ex.: "Our products fiber cant SHINE!..."). Vem do campo "Aviso geral" da revisão do pedido.
-- **Requeriments POR MODELO**: campo novo em cada modelo na mesa de criação ("hd lace, same hairline, no baby hair..."), que sai numa caixa larga ao lado das cores do modelo.
-- **Cores com foto logo abaixo de CADA modelo** (banner vermelho COLORS + fotos), não mais tudo no fim.
-- **Até 2 fotos do modelo lado a lado** (frente/verso, quando o produto tem galeria).
-- Total geral só de **peças**.
-
-O campo Requeriments é salvo no pedido (novo no banco) — preencha uma vez e toda exportação sai certa. O aviso geral usa as observações do pedido.
-
-## 🐛 FIX descoberto no caminho: snapshot de preço nunca era gravado
-
-O RPC `replace_order_items` no banco **descartava o `price_usd_snapshot`** desde sempre — o app enviava, o banco ignorava (0 de 67 itens tinham snapshot). Nada quebrava porque o código lê `snapshot ?? price_usd`, mas a garantia "snapshot é sagrado" não existia de fato. Corrigido no RPC + backfill dos 14 itens com preço (`sql/24`, já aplicada em produção).
+1. **Fotos nunca mais distorcem.** Antes a imagem era ancorada pra "preencher a célula" — o Google Sheets estica/espreme isso. Agora toda foto entra em **tamanho fixo proporcional** (calculado da dimensão real da imagem). Foto alta sai alta, quadrada sai quadrada — em Excel E no Google Sheets.
+2. **Grade de 16 colunas uniformes + mesclagens** — o jeito que a sua planilha original é construída. Nome de cor grande ("#24B18S8 SHADED MOCHA", "BALAYAGE ASH BLONDE") tem ~213px de célula mesclada com quebra de linha, não estoura mais.
+3. **Faixa ROSA separando cada modelo** (como na original) + **cabeçalho repetido em cada bloco** (PHOTO | MODEL | CAP | COLOR | QUANTITY | Requeriments) — a fábrica entende cada seção sem adivinhar.
+4. Rótulos das cores em células duplas (~142px) com quebra; fotos das cores em caixas de 142×133px, 8 por linha.
 
 ## ✅ Verificações
 
-- O .xlsx gerado foi **reaberto e inspecionado célula a célula** no teste: banner amarelo na linha 1, cabeçalho MODEL/CAP/COLOR/QUANTITY/Requeriments, requeriments do modelo presente, **zero ocorrência de $/FOB/PP/BRL**, COLORS por modelo, TOTAL=35 peças, 4 imagens embutidas (2 do modelo + 2 de cor)
-- Campo Requeriments no criador verificado (pré-carrega na edição, salva no payload)
-- 8 testes reescritos pro novo formato; ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso)
+- xlsx gerado e **reaberto com ExcelJS**: proporções conferidas imagem a imagem (foto-teste 120×400 saiu 38×126 — mesma razão, sem esticar; quadrada saiu 126×126), 2 faixas magenta (1 por modelo), cabeçalho nos 2 blocos, nomes grandes presentes, requeriments e aviso no lugar, 9 imagens, 39 mesclagens
+- ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso; a camada pura da planilha não mudou)
 
-## 📋 Pendências do usuário (seguem valendo)
+## 📋 Rodadas anteriores (em produção)
 
-- Revogar o **token antigo da Shopify** · Ativar **proteção contra senha vazada** no Supabase
+- **v13.58** — formato sem valores + requeriments por modelo + aviso geral + COLORS por modelo + fix do snapshot de preço (sql/24).
+- Pendências do usuário: revogar token antigo da Shopify · ativar proteção de senha vazada no Supabase.

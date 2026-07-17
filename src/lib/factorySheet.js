@@ -1,11 +1,13 @@
 // src/lib/factorySheet.js
 // v13.47 — Exporta a "planilha da fábrica": Excel (.xlsx) com fotos embutidas.
-// v13.58 — Formato alinhado com a planilha real enviada à fábrica:
-//   • SEM valores (FOB/TOTAL/PP/BRL são controle interno — fábrica não vê)
-//   • Aviso geral do pedido no topo (banner amarelo, texto vermelho)
-//   • Requeriments POR MODELO (campo próprio do item)
-//   • Seção COLORS com foto logo abaixo de CADA modelo (não no fim)
-//   • Até 2 fotos do modelo lado a lado (frente/verso quando houver galeria)
+// v13.58 — Formato alinhado com a planilha real (sem valores; requeriments
+//          por modelo; aviso geral; COLORS por modelo).
+// v13.59 — Layout reconstruído após teste real da usuária:
+//   • Grade de 16 colunas UNIFORMES + mesclagens (como a planilha original é
+//     feita) — células não estouram com nomes grandes
+//   • Fotos em TAMANHO FIXO proporcional (tl+ext) — nunca esticam/espremem,
+//     inclusive no Google Sheets (o anchor de célula distorcia lá)
+//   • Cabeçalho repetido em cada modelo + FAIXA ROSA separando os blocos
 //
 // ExcelJS é pesado (~940KB) — carregado via import() dinâmico só quando o
 // usuário clica em exportar, pra não inflar o bundle principal.
@@ -123,16 +125,35 @@ function hexSwatchJpeg(hex, size = 240) {
   })
 }
 
+// Tamanho proporcional dentro de uma caixa (px) — a imagem NUNCA distorce.
+function fitPx(img, maxW, maxH) {
+  const r = Math.min(maxW / img.width, maxH / img.height, 1e9)
+  return { width: Math.max(1, Math.round(img.width * r)), height: Math.max(1, Math.round(img.height * r)) }
+}
+
 // ═══════════════════════════════════════════════════════════════════
-// Geração do .xlsx
+// Geração do .xlsx — grade de 16 colunas uniformes + mesclagens
 // ═══════════════════════════════════════════════════════════════════
 
 const GREEN = 'FF92D050'    // verde dos destaques da planilha original
-const CYAN = 'FF00FFFF'     // ciano do nome do modelo (planilha original)
+const CYAN = 'FF00FFFF'     // ciano do nome do modelo
 const RED = 'FFFF0000'      // banner COLORS
-const YELLOW = 'FFFFFF00'   // banner do aviso geral
+const YELLOW = 'FFFFFF00'   // aviso geral
+const MAGENTA = 'FFFF00FF'  // faixa separadora entre modelos (planilha original)
 const HEADER_GRAY = 'FFF2F2F2'
-const PER_ROW = 5           // fotos de cor por linha
+
+const N_COLS = 16
+const COL_W = 9.5                      // largura uniforme (~71px cada)
+const PX_PER_COL = Math.round(COL_W * 7 + 5)   // ≈ 71px
+const PT_TO_PX = 4 / 3                 // altura de linha: pontos → pixels
+
+// Regiões da grade (colunas 1-index, inclusive)
+const PHOTO_C = [1, 4]      // fotos do modelo (2 fotos lado a lado)
+const MODEL_C = [5, 7]      // código + nome (ciano)
+const CAP_C = [8, 9]
+const COLOR_C = [10, 12]    // código da cor (verde)
+const QTY_C = [13, 13]
+const REQ_C = [14, 16]      // requeriments
 
 export async function generateFactorySheet(order, products = [], colors = []) {
   const data = buildFactorySheetData(order, products, colors)
@@ -140,138 +161,135 @@ export async function generateFactorySheet(order, products = [], colors = []) {
 
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Kira Gestão'
-  const ws = wb.addWorksheet('PEDIDO', { views: [{ showGridLines: true }] })
+  const ws = wb.addWorksheet('PEDIDO', { views: [{ showGridLines: false }] })
+  ws.columns = Array.from({ length: N_COLS }, () => ({ width: COL_W }))
 
-  // A fotos do modelo (larga p/ 2 imgs) | B código+nome | C cap | D cor | E qtd | F..H requeriments
-  ws.columns = [
-    { width: 34 }, { width: 17 }, { width: 11 }, { width: 19 }, { width: 11 },
-    { width: 16 }, { width: 16 }, { width: 16 },
-  ]
+  const mergeSet = (r1, c1, r2, c2, value, opts = {}) => {
+    ws.mergeCells(r1, c1, r2, c2)
+    const cell = ws.getCell(r1, c1)
+    if (value !== undefined) cell.value = value
+    if (opts.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: opts.fill } }
+    if (opts.font) cell.font = opts.font
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true, ...(opts.align || {}) }
+    if (opts.border !== false) cell.border = thinBorder()
+    return cell
+  }
 
-  // ── Aviso geral do pedido (banner amarelo, como na planilha original) ──
+  // ── Aviso geral do pedido (banner amarelo, texto vermelho) ──
   if (data.generalNote) {
-    const noteRow = ws.addRow([`Note: ${data.generalNote}`])
-    ws.mergeCells(noteRow.number, 1, noteRow.number, 8)
-    const cell = ws.getCell(noteRow.number, 1)
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: YELLOW } }
-    cell.font = { bold: true, color: { argb: RED }, size: 11 }
-    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-    noteRow.height = Math.max(20, Math.ceil(data.generalNote.length / 90) * 16)
+    const r = ws.addRow([]).number
+    mergeSet(r, 1, r, N_COLS, `Note: ${data.generalNote}`, {
+      fill: YELLOW,
+      font: { bold: true, color: { argb: RED }, size: 11 },
+    })
+    ws.getRow(r).height = Math.max(22, Math.ceil(data.generalNote.length / 110) * 16)
     ws.addRow([])
   }
 
-  const header = ws.addRow(['', 'MODEL', 'CAP', 'COLOR', 'QUANTITY', 'Requeriments'])
-  ws.mergeCells(header.number, 6, header.number, 8)
-  header.font = { bold: true, size: 10 }
-  header.alignment = { horizontal: 'center', vertical: 'middle' }
-  header.eachCell({ includeEmpty: false }, cell => {
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_GRAY } }
-    cell.border = thinBorder()
-  })
-
   // ── Blocos por modelo ──
   for (const m of data.models) {
-    const startRow = ws.rowCount + 1
-    const n = Math.max(m.colorRows.length, 1)
+    // Cabeçalho do bloco (repetido por modelo — fábrica entende cada seção)
+    const hr = ws.addRow([]).number
+    const H = { fill: HEADER_GRAY, font: { bold: true, size: 10 } }
+    mergeSet(hr, PHOTO_C[0], hr, PHOTO_C[1], 'PHOTO', H)
+    mergeSet(hr, MODEL_C[0], hr, MODEL_C[1], 'MODEL', H)
+    mergeSet(hr, CAP_C[0], hr, CAP_C[1], 'CAP', H)
+    mergeSet(hr, COLOR_C[0], hr, COLOR_C[1], 'COLOR', H)
+    mergeSet(hr, QTY_C[0], hr, QTY_C[1], 'QUANTITY', H)
+    mergeSet(hr, REQ_C[0], hr, REQ_C[1], 'Requeriments', H)
+    ws.getRow(hr).height = 16
 
-    m.colorRows.forEach((r, i) => {
-      const row = ws.addRow([
-        i === 0 ? '' : undefined,
-        i === 0 ? `${m.code}${m.code && m.name ? '\n' : ''}${m.name}` : undefined,
-        i === 0 ? m.cap : undefined,
-        r.colorCode || '—',
-        r.qty,
-        i === 0 ? (m.requirements || '') : undefined,
-      ])
-      row.height = Math.max(24, Math.floor(130 / n))
-      row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
-      row.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN } }
-      for (const col of [3, 4, 5]) row.getCell(col).border = thinBorder()
+    const n = Math.max(m.colorRows.length, 1)
+    // Altura de cada linha de cor: bloco total ≥ ~200px pra caber as fotos,
+    // e cada linha ≥ 26pt pra nomes de cor grandes (2 linhas)
+    const rowPt = Math.max(26, Math.ceil(210 / n / PT_TO_PX))
+    const startRow = ws.rowCount + 1
+
+    m.colorRows.forEach((r) => {
+      const row = ws.addRow([])
+      row.height = rowPt
+      const rn = row.number
+      mergeSet(rn, COLOR_C[0], rn, COLOR_C[1], r.colorCode || '—', { fill: GREEN, font: { bold: true, size: 10 } })
+      mergeSet(rn, QTY_C[0], rn, QTY_C[1], r.qty, { font: { size: 11 } })
+    })
+    const endRow = startRow + n - 1
+
+    // Regiões verticais do bloco (foto, modelo, cap, requeriments)
+    mergeSet(startRow, PHOTO_C[0], endRow, PHOTO_C[1], '')
+    mergeSet(startRow, MODEL_C[0], endRow, MODEL_C[1], `${m.code}${m.code && m.name ? '\n' : ''}${m.name}`, {
+      fill: CYAN, font: { bold: true, size: 11 },
+    })
+    mergeSet(startRow, CAP_C[0], endRow, CAP_C[1], m.cap, { font: { size: 10 } })
+    mergeSet(startRow, REQ_C[0], endRow, REQ_C[1], m.requirements || '', {
+      font: { size: 10, color: { argb: 'FF1D4ED8' } },
+      align: { horizontal: 'left' },
     })
 
-    const endRow = startRow + n - 1
-    if (n > 1) {
-      ws.mergeCells(startRow, 1, endRow, 1)
-      ws.mergeCells(startRow, 2, endRow, 2)
-      ws.mergeCells(startRow, 3, endRow, 3)
-    }
-    // Requeriments: caixa larga mesclada (F..H em todas as linhas do modelo)
-    ws.mergeCells(startRow, 6, endRow, 8)
-    const reqCell = ws.getCell(startRow, 6)
-    reqCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
-    reqCell.font = { size: 10, color: { argb: 'FF1D4ED8' } }
-    reqCell.border = thinBorder()
-    // Nome do modelo em ciano (identidade visual da planilha original)
-    const modelCell = ws.getCell(startRow, 2)
-    modelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CYAN } }
-    modelCell.font = { bold: true, size: 11 }
-    modelCell.border = thinBorder()
-    ws.getCell(startRow, 1).border = thinBorder()
-
-    // Até 2 fotos do modelo lado a lado dentro da célula mesclada da coluna A
+    // Fotos do modelo: tamanho FIXO proporcional (nunca estica), lado a lado
+    const blockPx = n * rowPt * PT_TO_PX
     const photos = (m.photoUrls || []).slice(0, 2)
     for (let pi = 0; pi < photos.length; pi++) {
       const img = await fetchAsJpeg(photos[pi])
       if (!img) continue
       const id = wb.addImage({ buffer: img.buffer, extension: 'jpeg' })
-      const half = photos.length > 1 ? 0.5 : 1
+      const ext = fitPx(img, PX_PER_COL * 2 - 10, blockPx - 8)
       ws.addImage(id, {
-        tl: { col: 0.03 + pi * half, row: startRow - 1 + 0.04 },
-        br: { col: 0.03 + pi * half + (half - 0.06), row: endRow - 0.04 },
+        tl: { col: (PHOTO_C[0] - 1) + pi * 2 + 0.08, row: startRow - 1 + 0.05 },
+        ext,
         editAs: 'oneCell',
       })
     }
 
-    // ── COLORS deste modelo: banner vermelho + fotos (logo abaixo, como no original) ──
-    const modelColors = m.usedColors
-    if (modelColors.length > 0) {
-      const bannerRow = ws.addRow(['COLORS'])
-      ws.mergeCells(bannerRow.number, 1, bannerRow.number, 8)
-      const banner = ws.getCell(bannerRow.number, 1)
-      banner.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: RED } }
-      banner.font = { bold: true, color: { argb: YELLOW }, size: 12 }
-      banner.alignment = { horizontal: 'center', vertical: 'middle' }
-      bannerRow.height = 18
+    // ── COLORS deste modelo: banner vermelho + rótulo/foto por coluna dupla ──
+    if (m.usedColors.length > 0) {
+      const br = ws.addRow([]).number
+      mergeSet(br, 1, br, N_COLS, 'COLORS', {
+        fill: RED, font: { bold: true, color: { argb: YELLOW }, size: 12 },
+      })
+      ws.getRow(br).height = 16
 
-      for (let i = 0; i < modelColors.length; i += PER_ROW) {
-        const chunk = modelColors.slice(i, i + PER_ROW)
+      const PER_ROW = 8   // 8 cores por linha, cada uma em 2 colunas (~142px)
+      for (let i = 0; i < m.usedColors.length; i += PER_ROW) {
+        const chunk = m.usedColors.slice(i, i + PER_ROW)
 
-        const labelRow = ws.addRow([])
-        labelRow.height = 20
+        const labelRowN = ws.addRow([]).number
+        ws.getRow(labelRowN).height = 24
         chunk.forEach((c, j) => {
-          const cell = labelRow.getCell(j + 1)
-          cell.value = c.code
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN } }
-          cell.font = { bold: true, size: 10 }
-          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-          cell.border = thinBorder()
+          mergeSet(labelRowN, j * 2 + 1, labelRowN, j * 2 + 2, c.code, {
+            fill: GREEN, font: { bold: true, size: 9 },
+          })
         })
 
-        const photoRow = ws.addRow([])
-        photoRow.height = 120
+        const photoRowN = ws.addRow([]).number
+        ws.getRow(photoRowN).height = 100  // ≈133px
         for (let j = 0; j < chunk.length; j++) {
+          mergeSet(photoRowN, j * 2 + 1, photoRowN, j * 2 + 2, '')
           const c = chunk[j]
           const img = c.photoUrl ? await fetchAsJpeg(c.photoUrl, 360) : await hexSwatchJpeg(c.hex)
           if (!img) continue
           const id = wb.addImage({ buffer: img.buffer, extension: 'jpeg' })
+          const ext = fitPx(img, PX_PER_COL * 2 - 12, 126)
           ws.addImage(id, {
-            tl: { col: j + 0.06, row: photoRow.number - 1 + 0.03 },
-            br: { col: j + 0.94, row: photoRow.number - 0.03 },
+            tl: { col: j * 2 + 0.08, row: photoRowN - 1 + 0.03 },
+            ext,
             editAs: 'oneCell',
           })
         }
       }
     }
 
-    ws.addRow([])  // respiro entre modelos
+    // ── Faixa rosa separando os modelos (como na planilha original) ──
+    const sep = ws.addRow([]).number
+    mergeSet(sep, 1, sep, N_COLS, '', { fill: MAGENTA, border: false })
+    ws.getRow(sep).height = 12
+    ws.addRow([])
   }
 
   // ── Total geral: só PEÇAS (valores são controle interno, não vão pra fábrica) ──
-  const totalRow = ws.addRow(['', '', '', 'TOTAL', data.grandQty])
-  totalRow.font = { bold: true, size: 12 }
-  totalRow.getCell(4).alignment = { horizontal: 'right' }
-  totalRow.getCell(5).alignment = { horizontal: 'center' }
-  totalRow.height = 22
+  const tr = ws.addRow([]).number
+  mergeSet(tr, COLOR_C[0], tr, COLOR_C[1], 'TOTAL', { font: { bold: true, size: 12 }, border: false, align: { horizontal: 'right' } })
+  mergeSet(tr, QTY_C[0], tr, QTY_C[1], data.grandQty, { font: { bold: true, size: 12 }, border: false })
+  ws.getRow(tr).height = 22
 
   // ── Download ──
   const buf = await wb.xlsx.writeBuffer()
@@ -290,6 +308,6 @@ export async function generateFactorySheet(order, products = [], colors = []) {
 }
 
 function thinBorder() {
-  const s = { style: 'thin', color: { argb: 'FFBFBFBF' } }
+  const s = { style: 'thin', color: { argb: 'FF999999' } }
   return { top: s, left: s, bottom: s, right: s }
 }
