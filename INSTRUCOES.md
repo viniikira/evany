@@ -1,26 +1,29 @@
-# KIRA v13.62 — HIDE MODE + custo estimado no Brasil (fator × dólar)
+# KIRA v13.63 — Recorte de foto embutido + cores por fábrica
 
-Duas features do uso real na mesa de criação de pedidos.
+## ✂️ Recortar a foto DENTRO do sistema
 
-## 🙈 HIDE MODE (modo discrição)
+As fichas técnicas das fábricas vêm com 5 fotos + texto numa imagem só — antes era preciso cortar em outro programa antes de anexar na cor. Agora, no **Banco de Cores**, ao clicar em "📷 Adicionar/Trocar foto":
 
-Botão **🙈** no topo do criador de pedidos. Um clique e **todos os valores somem da tela**: preço base do modelo, preço por cor, coluna preço/un, totais por linha, FOB, estimativa em reais, chip de "última FOB" e o fator/dólar. Fica um selo âmbar **"🙈 valores ocultos"** — clicar nele traz tudo de volta.
+1. Escolhe o arquivo → abre a tela de **recorte** com a imagem grande.
+2. **Arrasta** a seleção pra mover · **cantos** redimensionam · arrastar fora desenha uma seleção nova · mostra o tamanho do recorte em px.
+3. **"✂️ Cortar e usar"** recorta na resolução original da região e sobe direto. Tem também **"Usar inteira"** (sem recorte) e ESC cancela.
 
-Pra quê: criar pedido, escolher modelos e cores **com uma funcionária do lado** sem expor custo nenhum. O estado persiste (recarregar a página não revela os valores) e a exportação da planilha da fábrica continua disponível (ela não tem preços desde a v13.58).
+Componente próprio (`PhotoCropModal`), zero dependências novas. Por enquanto ligado nas **cores** (onde doía); dá pra ligar em produtos/ideias depois se quiser.
 
-## 💵 Fator de conversão × dólar (custo estimado no Brasil)
+## 🏭 Cores por fábrica
 
-No topo do criador (modo normal): **`fator × [1,65] · US$ [5,50]`** — os dois editáveis.
+Algumas cores só existem em certas fábricas — o campo "Fábricas que fazem esta cor bem" já existia na edição da cor e agora é usado de verdade:
 
-- **Fator** (~1,50–1,80): o multiplicador da importação que dá a "ideia" do custo final da peça.
-- **Dólar**: sugerido a partir da cotação ao vivo **arredondada pra cima** (5,43 → sugestão 5,50), mas você trava no valor que quiser.
-- O rodapé mostra **"≈ R$ X no Brasil"** = FOB × fator × dólar (tooltip com a conta aberta), e **cada combinação** mostra o custo estimado por peça ("≈ R$ 168/un").
-- Os dois valores são **salvos no pedido** (colunas `conversion_factor` e `budget_rate`, que já existiam no banco e nunca tinham sido expostas na criação) e **lembrados** pro próximo pedido.
+- **Banco de Cores**: seletor "🏭 Todas as fábricas" filtra as cores marcadas pra uma fábrica específica.
+- **Criador de pedidos**: a galeria de cores de cada modelo abre por padrão mostrando **só as cores da fábrica do pedido + as sem restrição** (cor sem fábrica marcada = disponível em todas). O chip **"🏭 cores de EPF"** vira **"🌐 todas as cores"** com um clique. Cores já selecionadas nunca somem da galeria.
+- O toggle só aparece quando existe pelo menos uma cor com restrição de fábrica (senão seria ruído).
+
+**Pra funcionar bem**: marque as fábricas nas cores restritas (editar cor → seção Fábricas). Cores sem marcação continuam aparecendo em todo lugar.
 
 ## ✅ Verificações
 
-- Testado no navegador: estimativa exata (FOB $185 × 1,65 × 5,50 = R$ 1.679 ✓, R$ 168/un ✓), dólar sugerido 5,50 a partir de 5,43 ✓; HIDE MODE zera **todos** os cifrões da tela, o selo permite desocultar, e o payload salvo leva fator/dólar
-- Bug pego na própria verificação: o botão de desocultar sumia junto com os valores (gate errado) — corrigido antes de publicar
+- Cropper: arrasto de 50% da largura produziu recorte de **exatamente 500px** dos 1000px originais (mapeamento pixel-perfect); clamp mínimo e saída JPEG conferidos; fallback pra viewport degenerado adicionado
+- Filtro por fábrica no criador: escondeu a cor exclusiva de outra fábrica, manteve a da fábrica + as sem restrição, e o toggle "todas" trouxe tudo de volta
 - ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso)
 
 ## 📋 Pendências do usuário (seguem valendo)

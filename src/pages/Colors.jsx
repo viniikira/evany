@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal, MH, MB, MF, useConfirm, useToast, SkeletonList } from '../components/ui'
 import { getContrastColor } from '../components/ColorSwatch'
+import { PhotoCropModal } from '../components/PhotoCropModal'
 import {
   listColors, upsertColor, deleteColor,
   listColorCategories, upsertColorCategory, deleteColorCategory,
@@ -25,6 +26,8 @@ export function ColorsPage({ user, perm }) {
   const [search, setSearch] = useState('')  // #8 buscador
   // v13.60 — cores sem foto eram invisíveis até estragarem uma planilha da fábrica
   const [noPhotoOnly, setNoPhotoOnly] = useState(false)
+  // v13.63 — algumas cores só existem em certas fábricas
+  const [factoryColorFilter, setFactoryColorFilter] = useState('')
   const [activeCategoryIds, setActiveCategoryIds] = useState([])  // #9 filtro multi categoria
   const [showCategoriesPanel, setShowCategoriesPanel] = useState(false)
   const [editingCategory, setEditingCategory] = useState(null)  // categoria sendo editada
@@ -356,6 +359,19 @@ export function ColorsPage({ user, perm }) {
             >📷 Sem foto ({n})</button>
           )
         })()}
+        {/* v13.63 — cores que só certas fábricas fazem */}
+        {(factories || []).length > 0 && (
+          <select
+            className="field"
+            style={{ maxWidth: 200 }}
+            value={factoryColorFilter}
+            onChange={e => setFactoryColorFilter(e.target.value)}
+            title="Mostra só as cores marcadas como feitas por esta fábrica (marque as fábricas ao editar cada cor)"
+          >
+            <option value="">🏭 Todas as fábricas</option>
+            {factories.map(fa => <option key={fa.id} value={fa.name}>{fa.name}</option>)}
+          </select>
+        )}
       </div>
     )}
     
@@ -378,7 +394,10 @@ export function ColorsPage({ user, perm }) {
       if (noPhotoOnly) {
         filteredColors = filteredColors.filter(c => !c.photo_url)
       }
-      const isFiltered = !!search.trim() || activeCategoryIds.length > 0 || noPhotoOnly
+      if (factoryColorFilter) {
+        filteredColors = filteredColors.filter(c => (c.factories || []).includes(factoryColorFilter))
+      }
+      const isFiltered = !!search.trim() || activeCategoryIds.length > 0 || noPhotoOnly || !!factoryColorFilter
       
       if (loading) return <SkeletonList rows={4} />
       if (filteredColors.length === 0 && isFiltered) {
@@ -596,6 +615,9 @@ function CategoryEditModal({ category, onClose, onSave, onDelete }) {
 }
 
 function ColorEditModal({ color, factories, categories = [], usedInProductsCount, onClose, onSave, onDelete, onUploadPhoto, onRemovePhoto, onViewProducts }) {
+  // v13.63 — foto escolhida abre o recorte embutido (fichas técnicas da fábrica
+  // vêm com 5 fotos + texto numa imagem só; antes tinha que cortar fora do sistema)
+  const [cropFile, setCropFile] = useState(null)
   const [f, setF] = useState({
     id: color.id,
     code: color.code,
@@ -656,8 +678,20 @@ function ColorEditModal({ color, factories, categories = [], usedInProductsCount
             <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer', textAlign: 'center' }}>
               📷 {f.photo_url ? 'Trocar foto' : 'Adicionar foto'}
               <input type="file" accept="image/*" style={{ display: 'none' }}
-                onChange={e => e.target.files?.[0] && onUploadPhoto(e.target.files[0])} />
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (file) setCropFile(file)
+                  e.target.value = ''  // permite escolher o mesmo arquivo de novo
+                }} />
             </label>
+            {cropFile && (
+              <PhotoCropModal
+                file={cropFile}
+                title={`Recortar foto da cor "${color.code}"`}
+                onCancel={() => setCropFile(null)}
+                onCrop={(cropped) => { setCropFile(null); onUploadPhoto(cropped) }}
+              />
+            )}
             {f.photo_url && (
               <button className="btn btn-outline btn-sm" onClick={onRemovePhoto}>❌ Remover foto</button>
             )}

@@ -119,6 +119,14 @@ export function OrderCreator({ order = null, prefill = null, factories, products
   // (antes a busca era compartilhada: digitar num card filtrava todos)
   const [galleryUI, setGalleryUI] = useState({})
   const setGallery = (itemId, patch) => setGalleryUI(prev => ({ ...prev, [itemId]: { ...(prev[itemId] || {}), ...patch } }))
+  // v13.63 — cores que só certas fábricas fazem: por padrão a galeria mostra
+  // as cores da fábrica do pedido (+ as sem restrição); toggle traz todas.
+  const [onlyFactoryColors, setOnlyFactoryColors] = useState(true)
+  const anyColorRestricted = useMemo(() => (colors || []).some(c => (c.factories || []).length > 0), [colors])
+  const colorMatchesFactory = (c) => {
+    const fs = Array.isArray(c.factories) ? c.factories : []
+    return fs.length === 0 || fs.includes(f.factory)  // sem restrição = disponível em todas
+  }
   const s = (k, v) => setF(p => ({ ...p, [k]: v }))
 
   // ── Reaproveitar pedido anterior (reorder rápido) ──
@@ -595,7 +603,11 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                 const selectedCodes = new Set((it.colors || []).map(c => (c.code || '').toLowerCase()))
                 const gUI = galleryUI[it.id] || {}
                 const q = (gUI.search || '').trim().toLowerCase()
-                const bank = (colors || []).filter(c =>
+                // v13.63 — filtro por fábrica do pedido (cores selecionadas nunca somem)
+                const bankBase = (onlyFactoryColors && f.factory && anyColorRestricted)
+                  ? (colors || []).filter(c => colorMatchesFactory(c) || selectedCodes.has((c.code || '').toLowerCase()))
+                  : (colors || [])
+                const bank = bankBase.filter(c =>
                   !q || (c.code || '').toLowerCase().includes(q) || (c.name_pt || '').toLowerCase().includes(q)
                 )
                 // v13.53 — galeria enxuta por padrão: cores do modelo + usuais + já
@@ -702,7 +714,27 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                         <span className="text-muted" style={{ fontSize: 11 }}>
                           Toque numa cor pra adicionar {info.registeredColors.length > 0 ? '· ⭐ = cores do modelo' : ''}
                         </span>
-                        <input className="field field-sm" placeholder="🔍 Buscar cor..." value={gUI.search || ''} onChange={e => setGallery(it.id, { search: e.target.value })} style={{ width: 160 }} />
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          {/* v13.63 — toggle: só cores desta fábrica ⇄ todas */}
+                          {anyColorRestricted && f.factory && (
+                            <button
+                              onClick={() => setOnlyFactoryColors(v => !v)}
+                              title={onlyFactoryColors
+                                ? `Mostrando as cores de ${f.factory} + as sem restrição de fábrica. Clique pra ver TODAS.`
+                                : 'Mostrando todas as cores do banco. Clique pra filtrar pelas da fábrica deste pedido.'}
+                              style={{
+                                fontSize: 11, padding: '4px 10px', borderRadius: 12, cursor: 'pointer',
+                                border: `1px solid ${onlyFactoryColors ? 'var(--primary)' : 'var(--border)'}`,
+                                background: onlyFactoryColors ? 'var(--primary)' : 'transparent',
+                                color: onlyFactoryColors ? '#fff' : 'var(--text-muted, #6b7280)',
+                                fontWeight: 600, whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {onlyFactoryColors ? `🏭 cores de ${f.factory}` : '🌐 todas as cores'}
+                            </button>
+                          )}
+                          <input className="field field-sm" placeholder="🔍 Buscar cor..." value={gUI.search || ''} onChange={e => setGallery(it.id, { search: e.target.value })} style={{ width: 160 }} />
+                        </div>
                       </div>
                       {/* Cores que este modelo costuma levar (do histórico) — 1 toque adiciona já com a quantidade média */}
                       {(() => {
