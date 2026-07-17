@@ -1,28 +1,26 @@
-# KIRA v13.61 — Produção: mega revisão (peças em primeiro lugar)
+# KIRA v13.62 — HIDE MODE + custo estimado no Brasil (fator × dólar)
 
-Do feedback: "não dá pra saber quantas peças estão em produção, atrelado a qual produto; espaço mal utilizado; não está lógico".
+Duas features do uso real na mesa de criação de pedidos.
 
-## 🏭 O que mudou
+## 🙈 HIDE MODE (modo discrição)
 
-**A pergunta nº1 agora tem resposta em todo nível:**
-- **KPIs no topo**: peças em produção · produtos · cores (com ⚠ das sem pedido) · peças em trânsito · próxima chegada.
-- **Por produto**: o total de peças aparece grande ao lado do nome ("ALICE — 70 pç").
-- **Por cor**: cada cor virou uma pill `[foto] 2 ×50` com a quantidade somada dos pedidos ativos. Cor em produção **sem pedido** ganha pill destacada "sem pedido".
-- **Por fábrica**: o cabeçalho do grupo mostra "480 peças · 10 produtos · 19 cores".
-- As **abas** contam peças ("Em produção 105 pç · Em trânsito 40 pç"), não mais cores.
+Botão **🙈** no topo do criador de pedidos. Um clique e **todos os valores somem da tela**: preço base do modelo, preço por cor, coluna preço/un, totais por linha, FOB, estimativa em reais, chip de "última FOB" e o fator/dólar. Fica um selo âmbar **"🙈 valores ocultos"** — clicar nele traz tudo de volta.
 
-**Vínculo com pedidos (o "atrelado a qual" que faltava):**
-- Cada produto mostra chips dos **pedidos ativos** que o contêm: "📋 Novembro 2025 · chega 10/08" ou "📋 … · **atrasado 47d**" — e o chip **abre o pedido** (mesma infra dos deep-links).
-- Na aba Trânsito, o nome do pedido é clicável e ganhou badge "**chega em Nd**" (âmbar ≤7d, vermelho se a previsão já passou).
+Pra quê: criar pedido, escolher modelos e cores **com uma funcionária do lado** sem expor custo nenhum. O estado persiste (recarregar a página não revela os valores) e a exportação da planilha da fábrica continua disponível (ela não tem preços desde a v13.58).
 
-**Espaço bem usado:**
-- Foto do produto encolheu de 160px pra 96px (era arte de marketing dominando o card) — os cards ficaram ~metade da altura, com o dobro de informação.
-- Ordenação padrão nova: **Mais peças** (o que é grande aparece primeiro).
-- Matching de cor ↔ pedido agora é **case-insensitive** (antes "r4/33/27" no pedido não casava com "R4/33/27" do produto e a quantidade sumia).
+## 💵 Fator de conversão × dólar (custo estimado no Brasil)
+
+No topo do criador (modo normal): **`fator × [1,65] · US$ [5,50]`** — os dois editáveis.
+
+- **Fator** (~1,50–1,80): o multiplicador da importação que dá a "ideia" do custo final da peça.
+- **Dólar**: sugerido a partir da cotação ao vivo **arredondada pra cima** (5,43 → sugestão 5,50), mas você trava no valor que quiser.
+- O rodapé mostra **"≈ R$ X no Brasil"** = FOB × fator × dólar (tooltip com a conta aberta), e **cada combinação** mostra o custo estimado por peça ("≈ R$ 168/un").
+- Os dois valores são **salvos no pedido** (colunas `conversion_factor` e `budget_rate`, que já existiam no banco e nunca tinham sido expostas na criação) e **lembrados** pro próximo pedido.
 
 ## ✅ Verificações
 
-- Testado no navegador com dados realistas: KPIs corretos (105 pç = 50+20+35), matching case-insensitive somando certo, cor presa marcada (1⚠), chip de pedido com "atrasado 47d" exato (107 corridos − 60 prometidos) e clique abrindo o pedido, trânsito com "chega em 3d"
+- Testado no navegador: estimativa exata (FOB $185 × 1,65 × 5,50 = R$ 1.679 ✓, R$ 168/un ✓), dólar sugerido 5,50 a partir de 5,43 ✓; HIDE MODE zera **todos** os cifrões da tela, o selo permite desocultar, e o payload salvo leva fator/dólar
+- Bug pego na própria verificação: o botão de desocultar sumia junto com os valores (gate errado) — corrigido antes de publicar
 - ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso)
 
 ## 📋 Pendências do usuário (seguem valendo)

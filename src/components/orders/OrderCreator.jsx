@@ -23,6 +23,15 @@ import { uid, UC, formatDate } from '../../lib/utils'
 
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
+// Fator de conversão típico da importação (1,50–1,80): FOB × fator × dólar ≈ custo no Brasil
+const DEFAULT_FACTOR = 1.65
+
+const lsNum = (k) => {
+  try {
+    const v = parseFloat(localStorage.getItem(k))
+    return v > 0 ? v : null
+  } catch { return null }
+}
 
 // Copia os itens de um pedido existente pra um rascunho novo — usado tanto
 // pelo "reaproveitar" da etapa 1 quanto pelo "Duplicar" do detalhe (v13.60,
@@ -48,6 +57,18 @@ export function OrderCreator({ order = null, prefill = null, factories, products
   const isEdit = !!(order && order.id)
   // Editando ou duplicando, a fábrica já existe — abre direto na mesa de criação
   const [step, setStep] = useState(isEdit || prefill ? 2 : 1)
+
+  // v13.62 — HIDE MODE: esconde TODOS os valores da tela (pra criar pedido
+  // com uma funcionária olhando sem expor custos). Persiste entre sessões.
+  const [hidePrices, setHidePrices] = useState(() => {
+    try { return localStorage.getItem('kira.hide_prices') === '1' } catch { return false }
+  })
+  const toggleHidePrices = () => setHidePrices(v => {
+    const nv = !v
+    try { localStorage.setItem('kira.hide_prices', nv ? '1' : '0') } catch { /* sem localStorage */ }
+    return nv
+  })
+  const showPrices = perm.prices && !hidePrices
   const [exportingSheet, setExportingSheet] = useState(false)
   const [f, setF] = useState(() => {
     if (!isEdit) {
@@ -60,6 +81,10 @@ export function OrderCreator({ order = null, prefill = null, factories, products
         expected_arrival: null,
         order_date: null,
         promised_lead_days: null,
+        // v13.62 — fator/dólar do cálculo "quanto custa chegando no Brasil";
+        // lembra os últimos usados e salva no pedido (colunas já existiam)
+        conversion_factor: prefill?.conversion_factor ?? lsNum('kira.conv_factor') ?? DEFAULT_FACTOR,
+        budget_rate: prefill?.budget_rate ?? lsNum('kira.budget_rate') ?? '',
         items: prefill ? itemsFromOrder(prefill) : [],
       }
     }
@@ -218,6 +243,17 @@ export function OrderCreator({ order = null, prefill = null, factories, products
     }),
   }))
 
+  // v13.62 — parâmetros do custo estimado no Brasil (FOB × fator × dólar).
+  // Dólar sugerido: cotação ao vivo arredondada PRA CIMA no próximo 0,10
+  // (margem de segurança — editável).
+  const suggestedRate = (() => { const n = parseFloat(rate); return n > 0 ? Math.ceil(n * 10) / 10 : 0 })()
+  const effFactor = parseFloat(f.conversion_factor) > 0 ? parseFloat(f.conversion_factor) : DEFAULT_FACTOR
+  const effRate = parseFloat(f.budget_rate) > 0 ? parseFloat(f.budget_rate) : suggestedRate
+  const setCostParam = (key, lsKey, val) => {
+    s(key, val)
+    try { if (val !== '' && parseFloat(val) > 0) localStorage.setItem(lsKey, String(val)) } catch { /* sem localStorage */ }
+  }
+
   // ── Totais ao vivo (mesma regra de FOB do resto do sistema: preço por cor) ──
   const totals = useMemo(() => {
     let qty = 0, fob = 0
@@ -230,9 +266,8 @@ export function OrderCreator({ order = null, prefill = null, factories, products
         fob += q * (cp || 0)
       }
     }
-    const fx = parseFloat(rate) || 0
-    return { qty, fob, brl: fx > 0 ? fob * fx : null }
-  }, [f.items, rate])
+    return { qty, fob, landed: effRate > 0 ? fob * effFactor * effRate : null }
+  }, [f.items, effFactor, effRate])
 
   const modelInfo = (it) => {
     if (it.idea_id) {
@@ -362,6 +397,47 @@ export function OrderCreator({ order = null, prefill = null, factories, products
           ))}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* v13.62 — fator × dólar do custo estimado no Brasil (salvos no pedido) */}
+          {showPrices && step > 1 && (
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8 }}
+              title={`Custo estimado no Brasil = FOB × fator × dólar.\nFator (~1,50–1,80) cobre frete/impostos; dólar você trava no valor que preferir (sugestão: cotação arredondada pra cima).\nOs dois ficam salvos no pedido.`}
+            >
+              <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>fator ×</span>
+              <input
+                type="number" step="0.05" min="1"
+                value={f.conversion_factor ?? ''}
+                onChange={e => setCostParam('conversion_factor', 'kira.conv_factor', e.target.value)}
+                aria-label="Fator de conversão da importação"
+                style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: 'var(--text)' }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>· US$</span>
+              <input
+                type="number" step="0.05" min="0"
+                placeholder={suggestedRate ? suggestedRate.toFixed(2) : '0.00'}
+                value={f.budget_rate ?? ''}
+                onChange={e => setCostParam('budget_rate', 'kira.budget_rate', e.target.value)}
+                aria-label="Dólar usado no cálculo"
+                style={{ width: 58, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: 'var(--text)' }}
+              />
+            </div>
+          )}
+          {/* v13.62 — HIDE MODE: criar pedido com alguém olhando sem expor custos.
+              Gate é perm.prices (NÃO showPrices): o botão precisa existir pra DESocultar. */}
+          {perm.prices && (
+            <button
+              onClick={toggleHidePrices}
+              aria-label={hidePrices ? 'Mostrar valores' : 'Ocultar valores'}
+              title={hidePrices
+                ? 'Modo discrição ATIVO — nenhum valor aparece na tela. Clique pra voltar a mostrar.'
+                : 'Ocultar todos os valores (modo discrição — útil com alguém olhando a tela)'}
+              style={hidePrices
+                ? { background: '#FEF3C7', border: '1px solid #FBBF24', color: '#92400E', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }
+                : { background: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px', fontSize: 14, cursor: 'pointer', color: 'var(--text)' }}
+            >
+              {hidePrices ? '🙈 valores ocultos' : '🙈'}
+            </button>
+          )}
           <button className="btn-icon" onClick={handleClose} aria-label="Fechar criador de pedido" style={{ fontSize: 18 }}>✕</button>
         </div>
       </div>
@@ -559,12 +635,12 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                         </div>
                         {info.code && <div className="text-muted" style={{ fontSize: 11, fontFamily: 'monospace' }}>{info.code}</div>}
                         <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                          {itemQty} pç{itemQty !== 1 ? 's' : ''}{perm.prices && itemFob > 0 ? ` · FOB ${fmt$(itemFob)}` : ''}
+                          {itemQty} pç{itemQty !== 1 ? 's' : ''}{showPrices && itemFob > 0 ? ` · FOB ${fmt$(itemFob)}` : ''}
                         </div>
                         {/* Sinais do histórico: alerta de preço + pedido a caminho */}
                         {intel && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
-                            {perm.prices && intel.price && intel.price.lastPrice != null && (() => {
+                            {showPrices && intel.price && intel.price.lastPrice != null && (() => {
                               const canApply = pu === 0
                               const Tag = canApply ? 'button' : 'span'
                               return (
@@ -598,7 +674,7 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                           </div>
                         )}
                       </div>
-                      {perm.prices && (
+                      {showPrices && (
                         <div style={{ width: 110 }}>
                           <label className="text-muted" style={{ fontSize: 9, display: 'block', marginBottom: 2 }}>💲 PREÇO USD BASE</label>
                           <input className="field field-sm" type="number" step="0.01" placeholder="0.00" value={it.price_usd ?? ''} onChange={e => updItem(it.id, 'price_usd', e.target.value)} />
@@ -709,9 +785,9 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                     {(it.colors || []).length > 0 && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '5px 12px', fontSize: 10, textTransform: 'uppercase', letterSpacing: .5, color: 'var(--text-muted, #6b7280)', background: 'var(--bg)' }}>
                         <div style={{ flex: 1 }}>Combinação</div>
-                        {perm.prices && <div style={{ width: 108, textAlign: 'center' }}>preço/un</div>}
+                        {showPrices && <div style={{ width: 108, textAlign: 'center' }}>preço/un</div>}
                         <div style={{ width: 118, textAlign: 'center' }}>quantidade</div>
-                        {perm.prices && <div style={{ width: 82, textAlign: 'right' }}>total</div>}
+                        {showPrices && <div style={{ width: 82, textAlign: 'right' }}>total</div>}
                         <div style={{ width: 26 }} />
                       </div>
                     )}
@@ -738,6 +814,12 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                             <div className="text-muted" style={{ fontSize: 11 }}>
                               {bankColor?.name_pt || ''}
                               {hasCustom && <span style={{ color: '#B45309' }}>{bankColor?.name_pt ? ' · ' : ''}preço próprio</span>}
+                              {/* v13.62 — quanto ESTA peça custa chegando no Brasil */}
+                              {showPrices && effective > 0 && effRate > 0 && (
+                                <span title={`${fmt$(effective)} × ${effFactor} × ${effRate.toFixed(2)} — custo estimado por peça no Brasil`}>
+                                  {(bankColor?.name_pt || hasCustom) ? ' · ' : ''}≈ {fmtR$(effective * effFactor * effRate)}/un
+                                </span>
+                              )}
                             </div>
                             {sug && sug.avg !== Number(cl.qty || 0) && (
                               <button
@@ -750,7 +832,7 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                             )}
                           </div>
                           {/* Preço com cara de dinheiro: $ …… /un (herda do modelo se vazio) */}
-                          {perm.prices && (
+                          {showPrices && (
                             <div
                               title={hasCustom ? `Preço próprio desta cor (modelo é ${fmt$(pu)})` : 'Deixe vazio pra herdar o preço do modelo'}
                               style={{
@@ -802,7 +884,7 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                             >+</button>
                           </div>
                           {/* Total só quando existe (nada de "—" solto parecendo sinal de menos) */}
-                          {perm.prices && (
+                          {showPrices && (
                             <div style={{ width: 82, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#F59E0B', flexShrink: 0 }}>
                               {lineTotal > 0 ? '= ' + fmt$(lineTotal) : ''}
                             </div>
@@ -875,8 +957,8 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                                   <ColorSwatch code={c.code} colors={colors} size="xs" /> {c.code}
                                 </td>
                                 <td style={{ textAlign: 'center', width: 60 }}>{c.qty}</td>
-                                {perm.prices && <td style={{ textAlign: 'right', width: 70 }}>{cp > 0 ? fmt$(cp) : '—'}</td>}
-                                {perm.prices && <td style={{ textAlign: 'right', width: 80, fontWeight: 600 }}>{cp > 0 ? fmt$(cp * Number(c.qty || 0)) : '—'}</td>}
+                                {showPrices && <td style={{ textAlign: 'right', width: 70 }}>{cp > 0 ? fmt$(cp) : '—'}</td>}
+                                {showPrices && <td style={{ textAlign: 'right', width: 80, fontWeight: 600 }}>{cp > 0 ? fmt$(cp * Number(c.qty || 0)) : '—'}</td>}
                               </tr>
                             )
                           })}
@@ -906,11 +988,14 @@ export function OrderCreator({ order = null, prefill = null, factories, products
       }}>
         <div style={{ display: 'flex', gap: 18, alignItems: 'baseline', fontSize: 13, flexWrap: 'wrap' }}>
           <span><strong style={{ fontSize: 16 }}>{totals.qty}</strong> <span className="text-muted">peças</span></span>
-          {perm.prices && totals.fob > 0 && (
+          {showPrices && totals.fob > 0 && (
             <span style={{ color: '#F59E0B', fontWeight: 700, fontSize: 15 }}>FOB {fmt$(totals.fob)}</span>
           )}
-          {perm.prices && totals.brl != null && totals.fob > 0 && (
-            <span className="text-muted" title="FOB × câmbio de agora — estimativa, sem fator de importação">≈ {fmtR$(totals.brl)} no câmbio de hoje</span>
+          {showPrices && totals.landed != null && totals.fob > 0 && (
+            <span
+              className="text-muted"
+              title={`FOB ${fmt$(totals.fob)} × fator ${effFactor} × US$ ${effRate.toFixed(2)} — estimativa de quanto essas peças custam chegando no Brasil (ajuste fator/dólar no topo)`}
+            >≈ <strong style={{ color: 'var(--text)' }}>{fmtR$(totals.landed)}</strong> no Brasil</span>
           )}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -920,8 +1005,9 @@ export function OrderCreator({ order = null, prefill = null, factories, products
               {step === 1 ? 'Escolher modelos →' : 'Revisar pedido →'}
             </button>
           )}
+          {/* Planilha da fábrica não tem preços (v13.58) — disponível mesmo no hide mode */}
           {step === 3 && perm.prices && (
-            <button className="btn btn-outline" disabled={exportingSheet} onClick={exportDraftSheet} title="Gera o Excel com fotos no formato enviado à fábrica">
+            <button className="btn btn-outline" disabled={exportingSheet} onClick={exportDraftSheet} title="Gera o Excel com fotos no formato enviado à fábrica (sem valores)">
               {exportingSheet ? '⏳ Gerando...' : '📊 Planilha da fábrica'}
             </button>
           )}
