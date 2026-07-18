@@ -1,32 +1,30 @@
-# KIRA v13.63 — Recorte de foto embutido + cores por fábrica
+# KIRA v13.64 — Produção: swatches legíveis + PANORAMA do produto
 
-## ✂️ Recortar a foto DENTRO do sistema
+Do feedback: "as cores estão ruins, difícil de ver; deveria dar um panorama geral e inteligente de cada produto quando clicar nele".
 
-As fichas técnicas das fábricas vêm com 5 fotos + texto numa imagem só — antes era preciso cortar em outro programa antes de anexar na cor. Agora, no **Banco de Cores**, ao clicar em "📷 Adicionar/Trocar foto":
+## 🎨 Cores finalmente visíveis
 
-1. Escolhe o arquivo → abre a tela de **recorte** com a imagem grande.
-2. **Arrasta** a seleção pra mover · **cantos** redimensionam · arrastar fora desenha uma seleção nova · mostra o tamanho do recorte em px.
-3. **"✂️ Cortar e usar"** recorta na resolução original da região e sobe direto. Tem também **"Usar inteira"** (sem recorte) e ESC cancela.
+Os pontinhos de 20px viraram **swatches de 52px** nos cards: foto da cor grande, quantidade sobreposta (×80) e código embaixo. Cor presa (sem pedido) ganha anel dourado + badge **!**. Clicar no swatch amplia a foto.
 
-Componente próprio (`PhotoCropModal`), zero dependências novas. Por enquanto ligado nas **cores** (onde doía); dá pra ligar em produtos/ideias depois se quiser.
+## 📊 Panorama do produto (clique no card)
 
-## 🏭 Cores por fábrica
+Clicar em qualquer produto da Produção abre o **panorama** — tudo que você quer saber, num lugar:
 
-Algumas cores só existem em certas fábricas — o campo "Fábricas que fazem esta cor bem" já existia na edição da cor e agora é usado de verdade:
+- **Agora**: total de peças em produção, grande.
+- **Pedidos ativos com o modelo**: nome (clicável → abre o pedido), status, peças, **barra de prazo** (verde → âmbar → vermelha se estourou), dias corridos vs prometido, atraso, chegada prevista — e **FOB + "≈ R$ X chegando"** usando o fator × dólar **salvos naquele pedido** (v13.62 fechando o ciclo).
+- **Cores em produção**: swatches de 74px com nome em português, quantidade, e as presas destacadas.
+- **Histórico do modelo**: quantas peças você já pediu na vida, em quantos pedidos, quando foi o último — e o sinal de preço (última FOB, tendência, alerta de aumento).
+- **🛒 Na loja** (se as cores têm SKU vinculado): estoque atual + vendidas em 6 meses, com aviso de idade do cache ("dados de 85d atrás — sincronize").
+- **"Costuma pedir"**: as cores usuais do modelo com médias.
 
-- **Banco de Cores**: seletor "🏭 Todas as fábricas" filtra as cores marcadas pra uma fábrica específica.
-- **Criador de pedidos**: a galeria de cores de cada modelo abre por padrão mostrando **só as cores da fábrica do pedido + as sem restrição** (cor sem fábrica marcada = disponível em todas). O chip **"🏭 cores de EPF"** vira **"🌐 todas as cores"** com um clique. Cores já selecionadas nunca somem da galeria.
-- O toggle só aparece quando existe pelo menos uma cor com restrição de fábrica (senão seria ruído).
-
-**Pra funcionar bem**: marque as fábricas nas cores restritas (editar cor → seção Fábricas). Cores sem marcação continuam aparecendo em todo lugar.
+É o raio-X que responde "produzo mais ou já chega?" sem abrir cinco telas.
 
 ## ✅ Verificações
 
-- Cropper: arrasto de 50% da largura produziu recorte de **exatamente 500px** dos 1000px originais (mapeamento pixel-perfect); clamp mínimo e saída JPEG conferidos; fallback pra viewport degenerado adicionado
-- Filtro por fábrica no criador: escondeu a cor exclusiva de outra fábrica, manteve a da fábrica + as sem restrição, e o toggle "todas" trouxe tudo de volta
+- Testado no navegador com cenário completo: 130 pç (80+50, case-insensitive), histórico 170 pç/2 pedidos, loja 7 estoque/12 vendidas + aviso de 85d, FOB $1.300 · ≈ R$ 11.798 chegando (fator/dólar do pedido, conta exata), 139 corridos/prazo 60/atrasado 79d com barra vermelha, GREY presa com !, clique abrindo o pedido
 - ESLint 0 erros, build OK, 225/226 testes (o 1 é o pré-existente de fuso)
 
 ## 📋 Pendências do usuário (seguem valendo)
 
 - Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase
-- Fila estratégica: **sync automático noturno da Shopify** · conferência de recebimento
+- Fila estratégica: **sync automático noturno da Shopify** (deixaria o bloco "Na loja" do panorama sempre fresco) · conferência de recebimento

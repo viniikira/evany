@@ -451,7 +451,7 @@ function AppCore() {
           )}
           {page === 'ideas' && <IdeasPage user={profile} perm={perm} initialData={dashData.ideas} onMutate={loadGlobalData} />}
           {page === 'products' && <ProductsPage user={profile} perm={perm} shopifyCache={dashData.shopifyCache} initialData={dashData.products} initialColors={dashData.colors} onMutate={loadGlobalData} initialDetailId={pendingOpenProductId} onDetailOpened={() => setPendingOpenProductId(null)} />}
-          {page === 'producao' && <ProducaoPage products={dashData.products} orders={dashData.orders} colors={dashData.colors} onOpenOrder={(id) => { setPendingOpenOrderId(id); setPage('orders') }} />}
+          {page === 'producao' && <ProducaoPage products={dashData.products} orders={dashData.orders} colors={dashData.colors} perm={perm} shopifyCache={dashData.shopifyCache} onOpenOrder={(id) => { setPendingOpenOrderId(id); setPage('orders') }} />}
           {page === 'orders' && <OrdersPage user={profile} perm={perm} rate={rate} initialData={dashData.orders} initialIdeas={dashData.ideas} onMutate={loadGlobalData} initialDetailId={pendingOpenOrderId} onDetailOpened={() => setPendingOpenOrderId(null)} />}
           {page === 'shopify' && <ShopifyPage user={profile} perm={perm} />}
           {page === 'calculator' && <CalculatorPage rate={rate} perm={perm} />}

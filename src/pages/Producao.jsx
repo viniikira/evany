@@ -15,10 +15,11 @@
 //   - Tab "Em Trânsito": pedidos status 'in_transit'
 
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { Lightbox, ClearFiltersButton } from '../components/ui'
+import { Lightbox, ClearFiltersButton, Modal, MH, MB } from '../components/ui'
 import { listFactories, listCollections } from '../lib/data/misc'
 import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
-import { formatDate } from '../lib/utils'
+import { priceSignalForModel, suggestColorsForModel } from '../lib/orderIntelligence'
+import { formatDate, UC } from '../lib/utils'
 
 export default function ProducaoPage({
   products = [],
@@ -26,6 +27,8 @@ export default function ProducaoPage({
   colors = [],
   factories: factoriesProp,
   collections: collectionsProp,
+  perm = {},
+  shopifyCache = null,
   onOpenOrder,
 }) {
   const [tab, setTab] = useState('production')
@@ -35,6 +38,8 @@ export default function ProducaoPage({
   const [showOnlyStuck, setShowOnlyStuck] = useState(false)
   const [sortBy, setSortBy] = useState('pieces')
   const [lb, setLb] = useState(null)
+  // v13.64 — panorama inteligente do produto (clique no card)
+  const [panoramaId, setPanoramaId] = useState(null)
 
   const [factories, setFactories] = useState(factoriesProp || [])
   const [collections, setCollections] = useState(collectionsProp || [])
@@ -340,6 +345,7 @@ export default function ProducaoPage({
             hasFilters={hasFilters}
             onPhotoClick={setLb}
             onOpenOrder={onOpenOrder}
+            onOpenPanorama={setPanoramaId}
           />
         ) : (
           <TransitContent
@@ -350,6 +356,24 @@ export default function ProducaoPage({
           />
         )}
       </div>
+
+      {/* v13.64 — Panorama inteligente do produto */}
+      {panoramaId && (() => {
+        const g = productionGroups.find(x => x.product.id === panoramaId)
+        if (!g) return null
+        return (
+          <ProductPanorama
+            group={g}
+            orders={orders}
+            colors={colors}
+            perm={perm}
+            shopifyCache={shopifyCache}
+            onOpenOrder={onOpenOrder}
+            onPhotoClick={setLb}
+            onClose={() => setPanoramaId(null)}
+          />
+        )
+      })()}
     </div>
   )
 }
@@ -358,7 +382,7 @@ export default function ProducaoPage({
 // SUB-COMPONENTS
 // ═════════════════════════════════════════════════════════════
 
-function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder }) {
+function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder, onOpenPanorama }) {
   if (byFactory.length === 0) {
     return (
       <EmptyState
@@ -392,6 +416,7 @@ function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder })
                 staggerDelay={i * 0.04}
                 onPhotoClick={onPhotoClick}
                 onOpenOrder={onOpenOrder}
+                onOpenPanorama={onOpenPanorama}
               />
             ))}
           </div>
@@ -401,7 +426,7 @@ function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder })
   )
 }
 
-function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder }) {
+function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder, onOpenPanorama }) {
   const { product, cores, totalQty, orders = [] } = group
   const photoUrl = product.card_image_url || (product.photos || [])[0]
   const stuckCount = cores.filter(c => !c.hasOrder).length
@@ -429,13 +454,15 @@ function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder }) {
   return (
     <article
       ref={cardRef}
-      className={`prd-product-card ${revealed ? 'revealed' : ''}`}
+      className={`prd-product-card clickable ${revealed ? 'revealed' : ''}`}
       style={{ transitionDelay: `${staggerDelay}s` }}
+      onClick={() => onOpenPanorama && onOpenPanorama(product.id)}
+      title="Clique pra ver o panorama completo deste produto"
     >
       <div
         className="prd-photo-wrap"
-        onClick={() => photoUrl && onPhotoClick(photoUrl)}
-        title={photoUrl ? 'Clique para ampliar' : ''}
+        onClick={(e) => { e.stopPropagation(); if (photoUrl) onPhotoClick(photoUrl) }}
+        title={photoUrl ? 'Clique para ampliar a foto' : ''}
       >
         {photoUrl ? (
           <img className="primary" src={photoUrl} alt={product.name} loading="lazy" />
@@ -454,24 +481,24 @@ function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder }) {
         </div>
         {product.collection && <div className="prd-prod-meta"><span className="prd-collection">{product.collection}</span></div>}
 
-        {/* Cores como pills COM QUANTIDADE */}
-        <div className="prd-pills">
+        {/* v13.64 — Cores como SWATCHES grandes (os pontinhos de 20px eram ilegíveis) */}
+        <div className="prd-sw-grid">
           {cores.map((c, idx) => (
             <div
               key={`${c.code}-${idx}`}
-              className={`prd-pill ${!c.hasOrder ? 'stuck' : ''}`}
+              className={`prd-sw ${!c.hasOrder ? 'stuck' : ''}`}
               onClick={(e) => { e.stopPropagation(); if (c.colorData?.photo_url) onPhotoClick(c.colorData.photo_url) }}
               title={c.hasOrder
-                ? `${c.qty} peça${c.qty !== 1 ? 's' : ''} em pedido ativo${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''}`
-                : `Em produção SEM pedido ativo${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''}`}
+                ? `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — ${c.qty} peça${c.qty !== 1 ? 's' : ''} em pedido ativo`
+                : `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — em produção SEM pedido ativo`}
             >
-              <span className="prd-pill-dot" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
-                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
-              </span>
-              <span className="prd-pill-code">{c.code}</span>
-              {c.hasOrder
-                ? <span className="prd-pill-qty">×{c.qty}</span>
-                : <span className="prd-pill-warn" title="Sem pedido ativo">sem pedido</span>}
+              <div className="prd-sw-img" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
+                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt={c.code} loading="lazy" />}
+                {c.hasOrder
+                  ? <span className="prd-sw-qty">×{c.qty}</span>
+                  : <span className="prd-sw-alert" title="Sem pedido ativo">!</span>}
+              </div>
+              <div className="prd-sw-code">{c.code}</div>
             </div>
           ))}
         </div>
@@ -483,7 +510,7 @@ function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder }) {
               <button
                 key={o.id}
                 className={`prd-order-chip ${o.isLate ? 'late' : ''}`}
-                onClick={() => onOpenOrder && onOpenOrder(o.id)}
+                onClick={(e) => { e.stopPropagation(); if (onOpenOrder) onOpenOrder(o.id) }}
                 title={onOpenOrder ? 'Abrir o pedido' : undefined}
               >
                 📋 {o.name}
@@ -644,6 +671,197 @@ function TransitProductRow({ product, cores, onPhotoClick }) {
         </div>
       </div>
     </div>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════
+// v13.64 — PANORAMA DO PRODUTO: tudo que a dona quer saber num clique:
+// quantas peças, de quais cores, em qual pedido, há quanto tempo, atrasado?,
+// quando chega, quanto custa chegando, histórico do modelo e loja (se vinculado).
+// ═════════════════════════════════════════════════════════════
+function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrder, onPhotoClick, onClose }) {
+  const { product, cores, totalQty } = group
+  const photoUrl = product.card_image_url || (product.photos || [])[0]
+
+  const data = useMemo(() => {
+    const lead = computeFactoryLeadTime(orders)
+    const active = []
+    let histQty = 0, histOrders = 0, lastDate = null
+    for (const o of orders) {
+      if (o.deleted_at || o.purged_at) continue
+      const item = (o.items || []).find(it => it.product_id === product.id)
+      if (!item) continue
+      const qty = (item.colors || []).reduce((s, c) => s + (Number(c.qty) || 0), 0)
+        + (((item.colors || []).length === 0) ? Number(item.quantity || 0) : 0)
+      if (['sent', 'manufacturing', 'in_transit', 'completed'].includes(o.status)) {
+        histQty += qty; histOrders++
+        const t = o.order_date || o.created_at
+        if (t && (!lastDate || new Date(t) > new Date(lastDate))) lastDate = t
+      }
+      if (o.status === 'sent' || o.status === 'manufacturing') {
+        const delay = computeOrderDelay(o, lead)
+        const start = o.order_date || o.manufacturing_started_at || o.created_at
+        const elapsed = start ? Math.max(0, Math.floor((Date.now() - new Date(start)) / 86400000)) : null
+        const deadline = o.promised_lead_days || delay?.deadlineDays || null
+        const pu = parseFloat(item.price_usd_snapshot ?? item.price_usd) || 0
+        const fob = (item.colors || []).reduce((s, c) => {
+          const cp = c.price_usd != null && c.price_usd !== '' ? parseFloat(c.price_usd) : pu
+          return s + (Number(c.qty) || 0) * (cp || 0)
+        }, 0)
+        const factor = parseFloat(o.conversion_factor) || 1.65
+        const fx = parseFloat(o.budget_rate) || 0
+        active.push({
+          id: o.id,
+          name: o.order_name || o.factory,
+          status: o.status,
+          statusLabel: o.status === 'sent' ? 'em revisão' : 'em fabricação',
+          expectedArrival: o.expected_arrival || null,
+          elapsed, deadline,
+          isLate: !!delay?.isLate,
+          daysLate: delay?.daysLate || 0,
+          qty, fob,
+          landed: fx > 0 && fob > 0 ? fob * factor * fx : null,
+        })
+      }
+    }
+    return {
+      active,
+      histQty, histOrders, lastDate,
+      price: priceSignalForModel(product.id, orders),
+      usual: suggestColorsForModel(product.id, orders).slice(0, 6),
+    }
+  }, [orders, product.id])
+
+  // Loja (se algum SKU das cores está vinculado ao cache da Shopify)
+  const shop = useMemo(() => {
+    const skus = (product.color_variants || []).map(cv => (cv.sku || '').trim()).filter(Boolean)
+    if (skus.length === 0 || !shopifyCache?.products) return null
+    const set = new Set(skus.map(s => s.toUpperCase()))
+    let stock = 0, matched = 0, sold = 0
+    for (const p of shopifyCache.products) {
+      for (const v of (p.variants || [])) {
+        if (v?.sku && set.has(String(v.sku).toUpperCase())) { matched++; stock += v.inventory_quantity || 0 }
+      }
+    }
+    for (const so of (shopifyCache.orders || [])) {
+      for (const li of (so.line_items || [])) {
+        if (li?.sku && set.has(String(li.sku).toUpperCase())) sold += li.quantity || 0
+      }
+    }
+    if (matched === 0 && sold === 0) return null
+    const ageDays = shopifyCache.last_sync ? Math.floor((Date.now() - new Date(shopifyCache.last_sync)) / 86400000) : null
+    return { stock, sold, ageDays }
+  }, [product.color_variants, shopifyCache])
+
+  const fmtR$ = (n) => 'R$ ' + Math.round(n).toLocaleString('pt-BR')
+
+  return (
+    <Modal onClose={onClose} width={780} allowOutsideClose zIndex={950}>
+      <MH title={`📊 ${UC(product.name || '')} — panorama`} onClose={onClose} />
+      <MB>
+        {/* Cabeçalho: foto + identidade + totais */}
+        <div className="prd-pan-head">
+          <div className="prd-pan-photo" onClick={() => photoUrl && onPhotoClick(photoUrl)} title={photoUrl ? 'Ampliar' : ''}>
+            {photoUrl ? <img src={photoUrl} alt="" /> : <span style={{ fontSize: 34, opacity: .3 }}>👑</span>}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="prd-pan-meta">
+              {product.factory_code && <span className="mono">{product.factory_code}</span>}
+              {product.factory && <span>🏭 {product.factory}</span>}
+              {product.collection && <span style={{ fontStyle: 'italic' }}>{product.collection}</span>}
+            </div>
+            <div className="prd-pan-total">
+              {totalQty.toLocaleString('pt-BR')}<small> peças em produção agora</small>
+            </div>
+            <div className="prd-pan-hist">
+              {data.histOrders > 0
+                ? <>Histórico: <strong>{data.histQty.toLocaleString('pt-BR')} peças</strong> em {data.histOrders} pedido{data.histOrders !== 1 ? 's' : ''}{data.lastDate ? ` · último em ${formatDate(data.lastDate, 'full')}` : ''}</>
+                : 'Primeiro pedido deste modelo.'}
+              {perm.prices && data.price?.lastPrice != null && (
+                <span className={`prd-pan-price ${data.price.hasIncreaseAlert ? 'alert' : ''}`}
+                  title={`${data.price.count} registro(s) de preço no histórico`}>
+                  {data.price.trend === 'up' ? '📈' : data.price.trend === 'down' ? '📉' : '💲'} última FOB ${data.price.lastPrice.toFixed(2)}
+                  {data.price.hasIncreaseAlert && data.price.lastIncreasePct != null ? ` · subiu ${Math.round(data.price.lastIncreasePct)}%` : ''}
+                </span>
+              )}
+            </div>
+            {shop && (
+              <div className="prd-pan-shop" title="Somado dos SKUs vinculados das cores deste produto">
+                🛒 Na loja: <strong>{shop.stock}</strong> em estoque · <strong>{shop.sold}</strong> vendidas (6m)
+                {shop.ageDays != null && shop.ageDays > 7 && (
+                  <span className="prd-pan-shop-age"> ⚠ dados de {shop.ageDays}d atrás — sincronize na aba Shopify</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Pedidos ativos com barra de prazo */}
+        <div className="prd-pan-sec">Pedidos ativos com este modelo</div>
+        {data.active.length === 0 && (
+          <div className="prd-pan-none">⚠ Nenhum pedido ativo — as cores abaixo estão em produção sem encomenda. Considere encomendar ou tirar de produção.</div>
+        )}
+        {data.active.map(o => {
+          const pct = o.deadline && o.elapsed != null ? Math.min(130, Math.round(o.elapsed / o.deadline * 100)) : null
+          return (
+            <div key={o.id} className="prd-pan-order">
+              <div className="prd-pan-order-top">
+                <button className="prd-pan-order-name" onClick={() => onOpenOrder && onOpenOrder(o.id)} title="Abrir o pedido">
+                  📋 {o.name}
+                </button>
+                <span className="prd-pan-order-status">{o.statusLabel}</span>
+                <span className="prd-pan-order-qty">{o.qty} pç deste modelo</span>
+                {perm.prices && o.fob > 0 && (
+                  <span className="prd-pan-order-fob" title={o.landed ? 'FOB deste modelo neste pedido · custo estimado chegando (fator × dólar do pedido)' : 'FOB deste modelo neste pedido'}>
+                    FOB ${o.fob.toFixed(2)}{o.landed ? ` · ≈ ${fmtR$(o.landed)} chegando` : ''}
+                  </span>
+                )}
+              </div>
+              <div className="prd-pan-order-sub">
+                {o.elapsed != null && <span>{o.elapsed} dia{o.elapsed !== 1 ? 's' : ''} corridos</span>}
+                {o.deadline && <span> · prazo {o.deadline}d</span>}
+                {o.isLate && <span className="late"> · atrasado {o.daysLate}d</span>}
+                {o.expectedArrival && <span> · 📅 chega {formatDate(o.expectedArrival, 'full')}</span>}
+              </div>
+              {pct != null && (
+                <div className="prd-pan-bar" title={`${pct}% do prazo decorrido`}>
+                  <div className={`prd-pan-bar-fill ${pct > 100 ? 'late' : pct > 80 ? 'soon' : ''}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        {/* Cores desta produção — swatches GRANDES */}
+        <div className="prd-pan-sec">Cores em produção</div>
+        <div className="prd-sw-grid lg">
+          {cores.map((c, idx) => (
+            <div
+              key={`${c.code}-${idx}`}
+              className={`prd-sw lg ${!c.hasOrder ? 'stuck' : ''}`}
+              onClick={() => c.colorData?.photo_url && onPhotoClick(c.colorData.photo_url)}
+              title={c.colorData?.name_pt || c.code}
+            >
+              <div className="prd-sw-img" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
+                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt={c.code} loading="lazy" />}
+                {c.hasOrder
+                  ? <span className="prd-sw-qty">×{c.qty}</span>
+                  : <span className="prd-sw-alert">!</span>}
+              </div>
+              <div className="prd-sw-code">{c.code}</div>
+              {c.colorData?.name_pt && <div className="prd-sw-name">{c.colorData.name_pt}</div>}
+            </div>
+          ))}
+        </div>
+
+        {/* Cores usuais do modelo (histórico) */}
+        {data.usual.length > 0 && (
+          <div className="prd-pan-usual">
+            ↻ Costuma pedir: {data.usual.map(u => `${u.code} (~${u.avgQty})`).join(' · ')}
+          </div>
+        )}
+      </MB>
+    </Modal>
   )
 }
 
@@ -1094,6 +1312,238 @@ const PRODUCAO_STYLES = `
 @keyframes prdStuckPulse {
   0%, 100% { box-shadow: 0 0 0 1px var(--accent); }
   50% { box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px rgba(198,168,108,.14); }
+}
+
+/* ═══ v13.64 — SWATCHES grandes de cor (card + panorama) ═══ */
+.prd-sw-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.prd-sw {
+  width: 52px;
+  cursor: zoom-in;
+  text-align: center;
+}
+.prd-sw.lg { width: 74px; }
+.prd-sw-img {
+  position: relative;
+  width: 52px; height: 52px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,.08);
+  transition: transform .2s cubic-bezier(.2,.9,.3,1), box-shadow .2s;
+}
+.prd-sw.lg .prd-sw-img { width: 74px; height: 74px; border-radius: 12px; }
+[data-theme="dark"] .prd-sw-img { border-color: rgba(255,255,255,.1); }
+.prd-sw-img img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.prd-sw:hover .prd-sw-img {
+  transform: translateY(-2px) scale(1.06);
+  box-shadow: 0 8px 18px rgba(74,25,66,.18);
+}
+.prd-sw-qty {
+  position: absolute;
+  bottom: 3px; right: 3px;
+  background: rgba(20,14,18,.82);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  backdrop-filter: blur(2px);
+}
+.prd-sw.lg .prd-sw-qty { font-size: 12px; padding: 2px 8px; }
+.prd-sw-alert {
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+.prd-sw.stuck .prd-sw-img {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+.prd-sw-code {
+  margin-top: 4px;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 9px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prd-sw.lg .prd-sw-code { font-size: 10px; font-weight: 600; }
+.prd-sw-name {
+  font-size: 9px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prd-product-card.clickable { cursor: pointer; }
+
+/* ═══ v13.64 — PANORAMA do produto ═══ */
+.prd-pan-head {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+.prd-pan-photo {
+  width: 108px; height: 142px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--border-light);
+  flex-shrink: 0;
+  cursor: zoom-in;
+  display: flex; align-items: center; justify-content: center;
+}
+.prd-pan-photo img { width: 100%; height: 100%; object-fit: cover; }
+.prd-pan-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.prd-pan-meta .mono { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; }
+.prd-pan-total {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 34px;
+  font-weight: 500;
+  color: var(--accent);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.prd-pan-total small {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+.prd-pan-hist {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.prd-pan-price {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: #EEF2F7;
+  color: #475569;
+  font-family: 'DM Mono', ui-monospace, monospace;
+}
+.prd-pan-price.alert { background: #FEE2E2; color: #991B1B; }
+.prd-pan-shop {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.prd-pan-shop-age { color: #B45309; font-size: 11px; }
+.prd-pan-sec {
+  margin: 16px 0 8px;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 4px;
+}
+.prd-pan-none {
+  padding: 10px 14px;
+  background: rgba(198,168,108,.1);
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+.prd-pan-order {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--surface);
+}
+.prd-pan-order-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.prd-pan-order-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.prd-pan-order-name:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.prd-pan-order-status {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+.prd-pan-order-qty {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.prd-pan-order-fob {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+.prd-pan-order-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.prd-pan-order-sub .late { color: #DC2626; font-weight: 700; }
+.prd-pan-bar {
+  margin-top: 7px;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--border-light);
+  overflow: hidden;
+}
+.prd-pan-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #059669;
+  transition: width .4s cubic-bezier(.2,.9,.3,1);
+}
+.prd-pan-bar-fill.soon { background: #F59E0B; }
+.prd-pan-bar-fill.late { background: #DC2626; }
+.prd-pan-usual {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'DM Mono', ui-monospace, monospace;
 }
 
 /* ═══ CHIPS de pedido vinculado ═══ */
