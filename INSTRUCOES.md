@@ -1,29 +1,27 @@
-# KIRA v13.65 — SKUs PUXADOS da Shopify (não mais sugeridos)
+# KIRA v13.66 — FIX: Sync da Shopify morria no fim ("Failed to fetch")
 
-Do feedback: "esses SKU deveriam puxar direto do Shopify e não sugerir".
+## 🐛 O que aconteceu
 
-## 🛒 O que mudou
+O Sync **funcionou** — buscou os produtos e chegou a 4.535 pedidos (página 19+) — e morreu **na hora de salvar**. Causa: com a paginação corrigida (v13.53), o sync passou a trazer o volume real da loja, e cada pedido/variante vem da API com **dezenas de campos** que o sistema nunca usa. O payload de vários MB estourava a gravação no Supabase e o sync perdia TUDO no último passo.
 
-A lógica invertida — a loja é a fonte da verdade:
+## ✅ O conserto (3 camadas)
 
-1. **Ao escolher a cor** de uma variante, o sistema tenta **puxar o SKU real** do cache da Shopify. Achou com confiança → preenche verificado (linha verde "vinculado" na hora). Não achou → deixa vazio (nada de chute).
-2. **Botão "🛒 Puxar SKUs da Shopify"** no cabeçalho das variantes: preenche **todos os SKUs vazios de uma vez** com os SKUs reais, e avisa o placar ("9 puxados · 2 sem correspondência").
-3. A **convenção (✨)** virou só fallback manual — pra produto que ainda não está na loja.
+1. **Slim antes de salvar**: o cache agora guarda só o que o sistema lê — produtos: `title + sku/estoque/preço` das variantes; pedidos: `data + sku/qtd/preço` dos itens. Payload de 4.500 pedidos: de dezenas de MB pra ~1 MB (testado).
+2. **Salvamento em duas etapas**: os **produtos são salvos assim que chegam** — se a fase de pedidos falhar por qualquer motivo, estoque/SKUs ficam garantidos e os pedidos antigos do cache são preservados (não zera nada).
+3. **Erro que explica**: no lugar do "TypeError: Failed to fetch" seco, a mensagem diz o que houve e que os produtos já salvos foram mantidos.
 
-**Regra de confiança** (nada é inventado):
-- 1º: a convenção NOME+COR **existe na loja**? → é ela (verificada).
-- 2º: entre os produtos da loja cujo título contém o nome, **exatamente um** tem SKU terminando na cor? → é ele (pega os casos fora da convenção, tipo `CHEREY6`).
-- Ambíguo ou ausente → fica vazio, com os chips de sugestão de sempre pra você decidir.
+O slim fica **dentro** do gravador (`setShopifyCache`) — qualquer caminho futuro que salvar o cache já sai magro.
 
-**Importante**: a fonte é o **cache** da Shopify. Se os produtos são recentes e o cache é de abril, o puxar não vai achá-los — o botão avisa e a solução é o **Sync** na aba Shopify (ou, de vez, o sync automático noturno que segue na fila).
+## ▶️ O que fazer agora
+
+Ctrl+Shift+R → aba Shopify → **Sync** de novo. Deve completar; você verá "produtos salvos ✓" no meio do caminho e o total no fim. Aí: **🛒 Puxar SKUs da Shopify** nos produtos (v13.65) passa a enxergar a loja inteira e atual.
 
 ## ✅ Verificações
 
-- 4 testes novos pro `resolveShopifySku` (convenção existente vence; título+cor único acha SKU fora da convenção; ambíguo não chuta; ausente → null)
-- Testado no navegador com os 4 casos: `LARA2` puxado (convenção), `XLARA-SEIS6` puxado (fora da convenção, via título), 99J ambígua ficou vazia, 912 inexistente ficou vazia; 2 linhas "vinculado" verdes na hora
-- ESLint 0 erros, build OK, 229/230 testes (o 1 é o pré-existente de fuso)
+- 6 testes novos pro slim (mantém exatamente os campos usados, corta >5× no produto gordo real, 4.500 pedidos < 1,5MB, nulos não quebram)
+- ESLint 0 erros, build OK, 235/236 testes (o 1 é o pré-existente de fuso)
 
 ## 📋 Pendências do usuário (seguem valendo)
 
 - Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase
-- Fila estratégica: **sync automático noturno da Shopify** (faria o "puxar SKUs" enxergar a loja inteira sempre) · conferência de recebimento
+- Fila estratégica: **sync automático noturno** (com o slim, ficou viável até pra edge function) · conferência de recebimento

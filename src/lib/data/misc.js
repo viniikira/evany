@@ -4,6 +4,7 @@
 
 import { supabase } from '../supabase'
 import { log } from '../logger'
+import { slimShopifyProducts, slimShopifyOrders } from '../shopifySlim'
 
 // ═══════════════════════════════════════════════════════════════════
 // IDEAS
@@ -334,12 +335,28 @@ export async function getShopifyCache() {
   return data
 }
 
+// v13.66 — SEMPRE emagrece antes de salvar: com a paginação real (4.500+
+// pedidos/6m), o payload cru de vários MB estourava a gravação e o sync
+// morria no fim perdendo tudo.
 export async function setShopifyCache(products, orders) {
   const { error } = await supabase
     .from('shopify_cache')
     .update({
-      products,
-      orders,
+      products: slimShopifyProducts(products),
+      orders: slimShopifyOrders(orders),
+      last_sync: new Date().toISOString(),
+    })
+    .eq('id', 1)
+  if (error) throw error
+}
+
+// v13.66 — salvamento parcial: produtos garantidos mesmo se a fase de pedidos
+// falhar depois (mantém os orders antigos no cache).
+export async function setShopifyCacheProducts(products) {
+  const { error } = await supabase
+    .from('shopify_cache')
+    .update({
+      products: slimShopifyProducts(products),
       last_sync: new Date().toISOString(),
     })
     .eq('id', 1)

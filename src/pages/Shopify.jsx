@@ -1,7 +1,7 @@
 // src/pages/Shopify.jsx
 import { useState, useEffect, useMemo } from 'react'
 import { listProducts } from '../lib/data/products'
-import { listColors, getShopifyCache, setShopifyCache, addLog as writeLog } from '../lib/data/misc'
+import { listColors, getShopifyCache, setShopifyCache, setShopifyCacheProducts, addLog as writeLog } from '../lib/data/misc'
 import { useToast } from '../components/ui'
 import { ProgressBar } from '../components/ProgressBar'
 import { toastError } from '../lib/errors'
@@ -119,9 +119,14 @@ export default function ShopifyPage({ user, perm }) {
       if (productsResult.truncated) {
         toast.push(`⚠️ Limite de ${productsResult.pages} páginas atingido para produtos. Pode haver mais.`, { kind: 'warning', duration: 8000 })
       }
-      
+
+      // v13.66 — salva os PRODUTOS já (emagrecidos): se a fase de pedidos
+      // falhar, estoque/SKUs ficam garantidos e os pedidos antigos são mantidos.
+      setSyncMsg(`${prods.length} produtos OK — salvando...`)
+      await setShopifyCacheProducts(prods)
+
       // Fetch pedidos paginados (últimos 6 meses)
-      setSyncMsg(`${prods.length} produtos OK (${productsResult.pages} págs). Buscando pedidos (6 meses)...`)
+      setSyncMsg(`${prods.length} produtos salvos ✓. Buscando pedidos (6 meses)...`)
       const since = new Date(Date.now() - 180 * 86400000).toISOString()
       const ordersResult = await fetchAllPages(
         `orders.json?status=any&created_at_min=${since}&limit=250&fields=id,name,created_at,total_price,line_items,financial_status,fulfillment_status`,
@@ -134,6 +139,7 @@ export default function ShopifyPage({ user, perm }) {
         toast.push(`⚠️ Limite de ${ordersResult.pages} páginas atingido para pedidos. Pode haver mais nos últimos 6 meses.`, { kind: 'warning', duration: 8000 })
       }
       
+      setSyncMsg(`${ords.length} pedidos OK — salvando (dados compactados)...`)
       await setShopifyCache(prods, ords)
       writeLog({
         userId: user.id, userName: user.name,
@@ -142,7 +148,14 @@ export default function ShopifyPage({ user, perm }) {
       })
       await load()
       setSyncMsg(`✓ Sincronizado! ${prods.length} produtos · ${ords.length} pedidos`)
-    } catch (e) { setSyncMsg('Erro: ' + (e.message || String(e))) }
+    } catch (e) {
+      // v13.66 — mensagem útil no lugar de "Failed to fetch" seco
+      const raw = e?.message || String(e)
+      const friendly = /failed to fetch/i.test(raw)
+        ? 'a gravação/conexão falhou no meio do caminho. Os produtos já salvos foram mantidos — tente o Sync de novo; se repetir, me avise.'
+        : raw
+      setSyncMsg('Erro: ' + friendly)
+    }
     setSyncing(false)
   }
 
