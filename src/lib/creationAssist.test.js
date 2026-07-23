@@ -2,7 +2,7 @@
 // v13.51 — Testa o assistente de criação.
 
 import { describe, it, expect } from 'vitest'
-import { freeNames, findNameConflict, specTemplateFrom, proposeSku, SPEC_FIELDS, buildShopifyIndex, suggestShopifyLinks, findShopifyBySku } from './creationAssist'
+import { freeNames, findNameConflict, specTemplateFrom, proposeSku, SPEC_FIELDS, buildShopifyIndex, suggestShopifyLinks, findShopifyBySku, resolveShopifySku } from './creationAssist'
 
 // Cache fake da Shopify (formato real: products[].variants[])
 const shopCache = {
@@ -106,6 +106,37 @@ describe('vínculo com a Shopify', () => {
   it('cache vazio/nulo não quebra', () => {
     expect(buildShopifyIndex(null)).toEqual([])
     expect(suggestShopifyLinks('Afro', '1B', [])).toEqual([])
+  })
+})
+
+describe('resolveShopifySku (puxa o SKU real, não sugere)', () => {
+  const index = buildShopifyIndex({
+    products: [
+      { title: 'Peruca Deusa Ondulada Cor 2', variants: [{ sku: 'DEUSA2', inventory_quantity: 8 }] },       // convenção existe
+      { title: 'Afro Puff Preto Cacheado 1B', variants: [{ sku: 'CHEREY1B', inventory_quantity: 5 }] },     // convenção NÃO existe, título+cor únicos
+      { title: 'Lara Lace Loira 613', variants: [{ sku: 'AAA613', inventory_quantity: 1 }] },               // ambíguo com o de baixo
+      { title: 'Lara Premium 613 Especial', variants: [{ sku: 'BBB613', inventory_quantity: 2 }] },
+    ],
+  })
+
+  it('1º: convenção NOME+COR existente na loja vence', () => {
+    const r = resolveShopifySku('Deusa', '2', index)
+    expect(r).toMatchObject({ sku: 'DEUSA2', source: 'exact' })
+  })
+
+  it('2º: título contém o nome + SKU termina na cor (único)', () => {
+    const r = resolveShopifySku('Afro Puff', '1B', index)
+    expect(r).toMatchObject({ sku: 'CHEREY1B', source: 'title' })
+  })
+
+  it('ambíguo (2 candidatos) → null, não chuta', () => {
+    expect(resolveShopifySku('Lara', '613', index)).toBeNull()
+  })
+
+  it('sem correspondência → null', () => {
+    expect(resolveShopifySku('Valentina', '1B', index)).toBeNull()
+    expect(resolveShopifySku('', '2', index)).toBeNull()
+    expect(resolveShopifySku('Deusa', '2', [])).toBeNull()
   })
 })
 

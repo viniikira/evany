@@ -5,7 +5,7 @@ import { ColorSwatch } from '../components/ColorSwatch'
 import { ColorChip } from '../components/ColorChip'
 import { PriceHistoryChart } from '../components/PriceHistoryChart'
 import { NameAutocomplete } from '../components/NameAutocomplete'
-import { proposeSku, buildShopifyIndex, suggestShopifyLinks, findShopifyBySku } from '../lib/creationAssist'
+import { proposeSku, buildShopifyIndex, suggestShopifyLinks, findShopifyBySku, resolveShopifySku } from '../lib/creationAssist'
 import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { FavoriteStar } from '../components/FavoriteStar'
 import { listProducts, createProduct, updateProduct, deleteProduct,
@@ -720,19 +720,42 @@ function ProductModal({ product, collections, factories, colors, names, existing
     setF(prev => ({ ...prev, color_variants: (prev.color_variants || []).map(c => c.id === id ? { ...c, [key]: val } : c) }))
     setDirty(true)
   }
-  // v13.52 — Ao escolher a cor, auto-propõe o SKU pela convenção (só se ainda vazio).
-  // Preenche os SKUs naturalmente — é o que vincula produto↔Shopify (vendas/estoque).
+  // v13.52 — auto-preenchia a CONVENÇÃO ao escolher a cor.
+  // v13.65 — agora PUXA o SKU REAL da Shopify (verificado no cache); a
+  // convenção só entra via chip ✨ manual quando a loja não tem o produto.
   const setCVCode = (id, code) => {
     setF(prev => ({
       ...prev,
       color_variants: (prev.color_variants || []).map(c => {
         if (c.id !== id) return c
         const next = { ...c, code }
-        if (!c.sku && code && prev.name) next.sku = proposeSku(prev.name, code)
+        if (!c.sku && code && prev.name) {
+          const real = resolveShopifySku(prev.name, code, shopifyIndex)
+          if (real) next.sku = real.sku
+        }
         return next
       }),
     }))
     setDirty(true)
+  }
+
+  // v13.65 — Puxa TODOS os SKUs vazios da Shopify de uma vez (só matches confiáveis)
+  const pullSkusFromShopify = () => {
+    let filled = 0, missed = 0
+    setF(prev => ({
+      ...prev,
+      color_variants: (prev.color_variants || []).map(c => {
+        if (c.sku || !c.code || !prev.name) return c
+        const real = resolveShopifySku(prev.name, c.code, shopifyIndex)
+        if (real) { filled++; return { ...c, sku: real.sku } }
+        missed++
+        return c
+      }),
+    }))
+    setDirty(true)
+    if (filled === 0 && missed === 0) toast.push('Nenhuma variante sem SKU pra preencher', { kind: 'info' })
+    else if (filled === 0) toast.push(`Nenhum SKU encontrado na Shopify pras ${missed} variante(s) — o cache pode estar desatualizado (Sync na aba Shopify) ou os produtos não estão na loja`, { kind: 'error', duration: 7000 })
+    else toast.push(`🛒 ${filled} SKU(s) puxado(s) da Shopify${missed > 0 ? ` · ${missed} sem correspondência confiável` : ''}`, { kind: 'success', duration: 5000 })
   }
   const rmCV = (id) => {
     setF(prev => ({ ...prev, color_variants: (prev.color_variants || []).filter(c => c.id !== id) }))
@@ -855,9 +878,19 @@ function ProductModal({ product, collections, factories, colors, names, existing
 
         {/* === VARIANTES DE COR (posição no topo pra acesso rápido) === */}
         <div className="form-group" ref={coresRef}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 6, flexWrap: 'wrap' }}>
             <label className="field-label" style={{ margin: 0 }}>🎨 Variantes de Cor ({(f.color_variants || []).length})</label>
-            <button className="btn btn-outline btn-sm" onClick={addCV}>+ Cor</button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {/* v13.65 — puxa os SKUs REAIS da loja de uma vez (matches verificados) */}
+              {shopifyIndex.length > 0 && (f.color_variants || []).some(c => c.code && !c.sku) && (
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={pullSkusFromShopify}
+                  title="Preenche os SKUs vazios com os SKUs REAIS da Shopify (só correspondências confiáveis — nada é inventado)"
+                >🛒 Puxar SKUs da Shopify</button>
+              )}
+              <button className="btn btn-outline btn-sm" onClick={addCV}>+ Cor</button>
+            </div>
           </div>
           {/* v13.60 — dado velho não pode fingir ser atual: idade do cache da Shopify */}
           {shopifyIndex.length > 0 && shopifyCache?.last_sync && (() => {

@@ -55,4 +55,4 @@ export function normSearch(s) {
 }
 
 // Versão do sistema — incrementar em cada update
-export const APP_VERSION = 'v13.64'
+export const APP_VERSION = 'v13.65'

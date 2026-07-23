@@ -107,6 +107,36 @@ export function findShopifyBySku(sku, index) {
 }
 
 /**
+ * v13.65 — PUXA o SKU real da Shopify (em vez de sugerir convenção).
+ * Regra de confiança, nesta ordem:
+ *   1. A convenção NOME+COR existe na loja → é ela (verificada).
+ *   2. Entre os produtos da loja cujo título contém o nome, EXATAMENTE UM
+ *      tem SKU terminando no slug da cor → é ele.
+ * Ambíguo ou sem correspondência → null (aí entram os chips de sugestão).
+ * @returns {{sku, title, stock, source: 'exact'|'title'}|null}
+ */
+export function resolveShopifySku(productName, colorCode, index) {
+  if (!productName || !colorCode || !Array.isArray(index) || index.length === 0) return null
+
+  // 1) Convenção existe na loja?
+  const conv = proposeSku(productName, colorCode)
+  if (conv) {
+    const hit = findShopifyBySku(conv, index)
+    if (hit) return { ...hit, source: 'exact' }
+  }
+
+  // 2) Título contém o nome + SKU termina no slug da cor (único)
+  const name = normTxt(productName).trim()
+  const skuSlug = (colorCode || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '')
+  if (!name || !skuSlug) return null
+  const candidates = index.filter(e =>
+    normTxt(e.title).includes(name) && (e.sku || '').toUpperCase().endsWith(skuSlug)
+  )
+  if (candidates.length === 1) return { ...candidates[0], source: 'title' }
+  return null
+}
+
+/**
  * Extrai a receita técnica de um produto/ideia (só campos preenchidos).
  * @returns {Object} patch pra aplicar no form
  */
