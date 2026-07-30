@@ -18,6 +18,7 @@ import { ColorSwatch } from '../ColorSwatch'
 import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
 import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel } from '../../lib/orderIntelligence'
+import { proposeOrderName } from '../../lib/orderNaming'
 import { ORDER_ST } from '../../lib/constants'
 import { uid, UC, formatDate } from '../../lib/utils'
 
@@ -128,6 +129,21 @@ export function OrderCreator({ order = null, prefill = null, factories, products
     return fs.length === 0 || fs.includes(f.factory)  // sem restrição = disponível em todas
   }
   const s = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  // ── Nome sugerido (v13.72) ──
+  // Ela nunca sabia o que escrever ("(sem nome)" em vários pedidos). Sugestão =
+  // MÊS/ANO · FÁBRICA, que é como ela já pensa + o que diferencia dois pedidos do
+  // mesmo mês. Enquanto ela não digitar nada, o campo acompanha fábrica/data;
+  // depois de digitar, nunca sobrescreve.
+  const nameTouched = useRef(!!f.order_name)
+  const suggestedName = useMemo(
+    () => proposeOrderName({ id: order?.id, factory: f.factory, order_date: f.order_date }, orders || []),
+    [f.factory, f.order_date, orders, order?.id]
+  )
+  useEffect(() => {
+    if (nameTouched.current || !suggestedName) return
+    setF(p => (p.order_name === suggestedName ? p : { ...p, order_name: suggestedName }))
+  }, [suggestedName])
 
   // ── Reaproveitar pedido anterior (reorder rápido) ──
   // Copia itens/cores/preços de um pedido existente pra um rascunho novo.
@@ -456,11 +472,8 @@ export function OrderCreator({ order = null, prefill = null, factories, products
         {/* ETAPA 1 — Fábrica e nome */}
         {step === 1 && (
           <div style={{ maxWidth: 560, margin: '4vh auto 0' }}>
-            <div className="form-group">
-              <label className="field-label">Nome do pedido</label>
-              <input className="field" value={f.order_name} onChange={e => s('order_name', e.target.value)} placeholder="Ex: Agosto 2026" autoFocus />
-            </div>
-            <label className="field-label" style={{ marginTop: 14 }}>Pra qual fábrica?</label>
+            {/* v13.72 — fábrica ANTES do nome: é ela que define o nome sugerido */}
+            <label className="field-label">Pra qual fábrica?</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, marginTop: 6 }}>
               {(factories || []).map(fa => {
                 const active = f.factory === fa.name
@@ -486,6 +499,35 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                   </button>
                 )
               })}
+            </div>
+
+            {/* Nome: já vem preenchido com MÊS/ANO · FÁBRICA (ela nunca sabia o
+                que escrever e vários pedidos ficaram "sem nome"). Enquanto ela
+                não digitar nada próprio, a sugestão acompanha a fábrica escolhida. */}
+            <div className="form-group" style={{ marginTop: 20 }}>
+              <label className="field-label">Nome do pedido</label>
+              <input
+                className="field"
+                value={f.order_name}
+                onChange={e => { nameTouched.current = true; s('order_name', e.target.value) }}
+                placeholder={suggestedName || 'Escolha a fábrica acima e o nome vem pronto'}
+              />
+              <div className="text-muted" style={{ fontSize: 11.5, marginTop: 5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {suggestedName && f.order_name !== suggestedName ? (
+                  <>
+                    <span>Sugestão: <strong>{suggestedName}</strong></span>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => { nameTouched.current = false; s('order_name', suggestedName) }}
+                    >
+                      ✨ usar
+                    </button>
+                  </>
+                ) : (
+                  <span>Mês/ano + fábrica — é o que diferencia dois pedidos do mesmo mês. Pode trocar por qualquer coisa.</span>
+                )}
+              </div>
             </div>
 
             {!isEdit && reuseCandidates.length > 0 && (
@@ -935,6 +977,15 @@ export function OrderCreator({ order = null, prefill = null, factories, products
         {/* ETAPA 3 — Revisão */}
         {step === 3 && (
           <div style={{ maxWidth: 720, margin: '0 auto' }}>
+            <div className="form-group">
+              <label className="field-label">Nome do pedido</label>
+              <input
+                className="field"
+                value={f.order_name}
+                onChange={e => { nameTouched.current = true; s('order_name', e.target.value) }}
+                placeholder={suggestedName || 'Ex: AGO/26 · HAIRCHUAN'}
+              />
+            </div>
             <div className="form-row">
               <div className="form-group">
                 <label className="field-label">{isEdit ? 'Status' : 'Status inicial'}</label>

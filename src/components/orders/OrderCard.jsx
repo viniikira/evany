@@ -14,7 +14,7 @@ import { formatDate, UC } from '../../lib/utils'
 const fmt$ = (n) => '$ ' + (n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })
 const fmtR$ = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR')
 
-export function OrderCard({ order: o, products = [], perm = {}, rate, leadTimeByFactory, onClick }) {
+export function OrderCard({ order: o, products = [], perm = {}, rate, leadTimeByFactory, reasons, onClick }) {
   const st = ORDER_ST.find(s => s.id === o.status)
   const delay = computeOrderDelay(o, leadTimeByFactory)
   const bal = computeOrderBalance(o, rate)
@@ -40,7 +40,11 @@ export function OrderCard({ order: o, products = [], perm = {}, rate, leadTimeBy
   const isOpenDebt = showMoney && !bal.isSettled && bal.remainingUsd > 0.01
 
   return (
-    <div className="card card-hover" onClick={onClick} style={{ cursor: 'pointer' }}>
+    <div
+      className="card card-hover"
+      onClick={onClick}
+      style={{ cursor: 'pointer', borderLeft: reasons?.length ? '3px solid #DC2626' : undefined }}
+    >
       {/* Nome + status */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -80,6 +84,12 @@ export function OrderCard({ order: o, products = [], perm = {}, rate, leadTimeBy
           {restThumbs > 0 && <span className="text-muted" style={{ fontSize: 11, marginLeft: 2 }}>+{restThumbs}</span>}
         </div>
       )}
+
+      {/* Motivos que o card ainda não mostra por conta própria (atraso sai na
+          linha de prazo, saldo em aberto sai no bloco financeiro) */}
+      {(reasons || []).filter(r => r.id !== 'late' && r.id !== 'open_debt_completed').map(r => (
+        <div key={r.id} style={{ fontSize: 11, fontWeight: 700, color: '#DC2626', marginTop: 8 }}>⚠️ {r.label}</div>
+      ))}
 
       {/* Prazo / chegada */}
       {(delay?.deadlineDays != null || o.expected_arrival) && (

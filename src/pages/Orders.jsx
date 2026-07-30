@@ -7,6 +7,7 @@ import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
 import { OrderCard } from '../components/orders/OrderCard'
+import { groupOrders, sortOrders, SORT_MODES } from '../lib/orderSort'
 import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { OrderCreator } from '../components/orders/OrderCreator'
 import {
@@ -37,6 +38,15 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
   const [colors, setColors] = useState([])
   const [loading, setLoading] = useState(initialData.length === 0)
   const [filter, setFilter] = useStickyFilter('orders.filter', 'all')
+  // v13.72 — ordem da lista. Preferência (não filtro): persiste entre sessões e
+  // não é apagada pelo "limpar filtros".
+  const [sortMode, setSortMode] = useState(() => {
+    try { return localStorage.getItem('kira.orders_sort') || 'smart' } catch { return 'smart' }
+  })
+  const changeSort = (mode) => {
+    setSortMode(mode)
+    try { localStorage.setItem('kira.orders_sort', mode) } catch { /* sem localStorage */ }
+  }
   // v13.54 — Criador visual (tela cheia) pra pedidos novos E edição.
   // v13.60 — shape: null fechado · {} novo · {order} editando · {prefill} duplicando.
   const [creator, setCreator] = useState(null)
@@ -123,6 +133,12 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
     ? trashOrders
     : (filter === 'all' ? orders : orders.filter(o => o.status === filter))
   const isViewingTrash = filter === 'trash'
+
+  // v13.72 — a lista vinha por created_at (data de DIGITAÇÃO), o que embaralhava
+  // pedidos retroativos. Agora: grupos de urgência no modo inteligente.
+  const sortCtx = { rate, leadTimeByFactory }
+  const groups = sortMode === 'smart' && !isViewingTrash ? groupOrders(filtered, sortCtx) : []
+  const sortedFlat = sortMode === 'smart' ? filtered : sortOrders(filtered, sortMode, sortCtx)
 
   const save = async (order) => {
     try {
@@ -783,6 +799,18 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
           onClear={() => clearStickyFilters('orders')}
         />
       </div>
+      {!isViewingTrash && (
+        <select
+          className="field field-sm"
+          value={sortMode}
+          onChange={e => changeSort(e.target.value)}
+          aria-label="Ordem da lista de pedidos"
+          title="Como ordenar a lista"
+          style={{ width: 'auto' }}
+        >
+          {SORT_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
+      )}
       {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo Pedido</button>}
     </div>
 
@@ -865,7 +893,34 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         })}
       </div>
     )
-    : <div className="grid-2">{filtered.map(o => (
+    : sortMode === 'smart' ? (
+      // v13.72 — agrupado por urgência: concluído nunca mais no meio do caminho
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {groups.map(g => (
+          <div key={g.id}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0, fontSize: 14, letterSpacing: .3 }}>{g.label} ({g.orders.length})</h3>
+              {g.hint && <span className="text-muted" style={{ fontSize: 11.5 }}>{g.hint}</span>}
+            </div>
+            <div className="grid-2">
+              {g.orders.map(o => (
+                <OrderCard
+                  key={o.id}
+                  order={o}
+                  products={products}
+                  perm={perm}
+                  rate={rate}
+                  leadTimeByFactory={leadTimeByFactory}
+                  reasons={g.reasonsById.get(o.id)}
+                  onClick={() => setDetail(o)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+    : <div className="grid-2">{sortedFlat.map(o => (
       <OrderCard
         key={o.id}
         order={o}
