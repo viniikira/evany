@@ -254,16 +254,31 @@ function cleanOrderPayload(order) {
     'order_name','factory','status','dispatch_code','conversion_factor',
     'budget_rate','real_cost_brl','notes','expected_arrival','created_by',
     'promised_lead_days','manufacturing_started_at','order_date',
+    'reserves',  // v13.68 — caixinhas em BRL guardadas pra este pedido
   ]
   const out = {}
   for (const k of allowed) {
     if (order[k] === undefined) continue
-    if (NUMERIC.has(k)) out[k] = sanitizeNum(order[k])
+    if (k === 'reserves') out[k] = sanitizeReserves(order[k])
+    else if (NUMERIC.has(k)) out[k] = sanitizeNum(order[k])
     else if (TEXT.has(k)) out[k] = sanitizeTxt(order[k])
     else if (DATE.has(k)) out[k] = sanitizeDate(order[k])
     else out[k] = order[k]
   }
   return out
+}
+
+// v13.68 — reservas: só valor positivo entra; banco/nota como texto limpo
+function sanitizeReserves(list) {
+  if (!Array.isArray(list)) return []
+  return list
+    .map(r => ({
+      amount_brl: sanitizeNum(r?.amount_brl),
+      bank: sanitizeTxt(r?.bank),
+      yields: !!r?.yields,
+      note: sanitizeTxt(r?.note),
+    }))
+    .filter(r => r.amount_brl != null && r.amount_brl > 0)
 }
 
 // Replace ATÔMICO via RPC. Ver explicação em data/products.js > replaceColorVariants.

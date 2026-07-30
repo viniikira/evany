@@ -229,8 +229,41 @@ export function computeOrderBalance(order, rate) {
     remainingBrl: projRate > 0 ? remainingUsd * projRate : null,
     percentPaid: fin.total > 0 ? (paidUsd / fin.total) * 100 : 0,
     isSettled: fin.total > 0 && remainingUsd <= 0.01,
-    // Reserva já guardada pra este pedido (v13.68 usa; aqui só repassa)
-    reservedBrl: num(order?.reserved_brl) || 0,
+    // v13.68 — caixinhas: quanto do que falta já está guardado
+    ...computeReserveCoverage(order, projRate > 0 ? remainingUsd * projRate : null),
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v13.68 — CAIXINHAS / RESERVAS (BRL guardado pra um pedido)
+// A reserva é em reais (banco brasileiro) e a dívida em dólar — a
+// comparação é feita em BRL, pela cotação de projeção do pedido.
+// ═══════════════════════════════════════════════════════════════════
+
+/** Total em BRL guardado pra um pedido. */
+export function computeOrderReserved(order) {
+  return (order?.reserves || []).reduce((a, r) => a + (num(r?.amount_brl) || 0), 0)
+}
+
+/**
+ * Cobertura: quanto do que falta já está reservado.
+ * @param {object} order
+ * @param {number|null} remainingBrl o que falta pagar, em BRL
+ */
+export function computeReserveCoverage(order, remainingBrl) {
+  const reservedBrl = computeOrderReserved(order)
+  const yieldingBrl = (order?.reserves || [])
+    .filter(r => r?.yields)
+    .reduce((a, r) => a + (num(r?.amount_brl) || 0), 0)
+  if (remainingBrl == null || remainingBrl <= 0) {
+    return { reservedBrl, yieldingBrl, coveragePercent: reservedBrl > 0 ? 100 : 0, toRaiseBrl: 0, isCovered: true }
+  }
+  return {
+    reservedBrl,
+    yieldingBrl,
+    coveragePercent: Math.min(100, (reservedBrl / remainingBrl) * 100),
+    toRaiseBrl: Math.max(0, remainingBrl - reservedBrl),
+    isCovered: reservedBrl >= remainingBrl - 0.01,
   }
 }
 
@@ -243,6 +276,7 @@ export function computePendingSummary(orders = [], rate) {
   const rows = []
   let totalFinal = 0, totalPaid = 0, totalRemainingUsd = 0, totalRemainingBrl = 0
   let confirmedRemaining = 0, estimatedRemaining = 0, criticalCount = 0
+  let totalReservedBrl = 0, totalYieldingBrl = 0, estimatedCount = 0
   for (const o of orders) {
     if (o.deleted_at || o.purged_at) continue
     if (!['sent', 'manufacturing', 'in_transit', 'completed'].includes(o.status)) continue
@@ -253,8 +287,10 @@ export function computePendingSummary(orders = [], rate) {
     if (b.remainingUsd > 0.01) {
       totalRemainingUsd += b.remainingUsd
       totalRemainingBrl += b.remainingBrl || 0
+      totalReservedBrl += b.reservedBrl || 0
+      totalYieldingBrl += b.yieldingBrl || 0
       if (b.isFullyConfirmed) confirmedRemaining += b.remainingUsd
-      else estimatedRemaining += b.remainingUsd
+      else { estimatedRemaining += b.remainingUsd; estimatedCount++ }
       if (o.status === 'completed') criticalCount++
       rows.push({
         id: o.id,
@@ -273,7 +309,13 @@ export function computePendingSummary(orders = [], rate) {
     totalFinal, totalPaid,
     totalRemainingUsd, totalRemainingBrl,
     confirmedRemaining, estimatedRemaining,
-    criticalCount,
+    criticalCount, estimatedCount,
+    // v13.68 — o quanto do compromisso total já está guardado
+    totalReservedBrl, totalYieldingBrl,
+    toRaiseBrl: Math.max(0, totalRemainingBrl - totalReservedBrl),
+    coveragePercent: totalRemainingBrl > 0
+      ? Math.min(100, (totalReservedBrl / totalRemainingBrl) * 100)
+      : (totalReservedBrl > 0 ? 100 : 0),
   }
 }
 

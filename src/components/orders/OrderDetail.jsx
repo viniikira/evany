@@ -12,6 +12,7 @@ import { PayRow } from './PayRow'
 import { addPayment, updatePayment, deletePayment, updateOrder } from '../../lib/data/orders'
 import { computeOrderBalance } from '../../lib/financial'
 import { TradingValuesModal } from './TradingValuesModal'
+import { ReservesSection } from './ReservesSection'
 import { uploadReceipt, getReceiptSignedUrl, deleteReceipt } from '../../lib/storage'
 import { generateOrderPDF } from '../../lib/pdf'
 import { generateFactorySheet } from '../../lib/factorySheet'
@@ -60,6 +61,14 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
       await onRefresh()
       toast.push('Valores da trading salvos', { kind: 'success' })
     } catch (e) { toastError(toast, e, 'Não foi possível salvar os valores') }
+  }
+
+  // v13.68 — caixinhas (dinheiro já guardado pra este pedido)
+  const saveReserves = async (reserves) => {
+    try {
+      await updateOrder(o.id, { reserves })
+      await onRefresh()
+    } catch (e) { toastError(toast, e, 'Não foi possível salvar a caixinha') }
   }
   
   const isM = o.status === 'manufacturing' || o.status === 'in_transit' || o.status === 'completed'
@@ -465,6 +474,15 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                     <div style={{ marginTop: 8, padding: '7px 10px', background: '#FFFBEB', border: '1px dashed #FBBF24', borderRadius: 6, fontSize: 11, color: '#92400E' }}>
                       ⚠️ Parte do total é <strong>estimativa</strong> (FOB × fator {(parseFloat(o.conversion_factor) || 1.65)}). Lance os valores em <strong>💵 Valores da trading</strong> pra ter o número exato.
                     </div>
+                  )}
+
+                  {/* v13.68 — caixinhas: quanto do que falta já está guardado */}
+                  {!readOnly && (
+                    <ReservesSection
+                      reserves={o.reserves || []}
+                      balance={bal}
+                      onSave={saveReserves}
+                    />
                   )}
                 </div>
               )}

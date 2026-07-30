@@ -1,41 +1,39 @@
-# KIRA v13.67 — VALOR FINAL da trading (Fase 1 do financeiro de importação)
+# KIRA v13.68 — Caixinhas por pedido + painel "quanto devo em tudo"
 
-## 🔴 O erro que existia (e o porquê da planilha)
+Fases 2 e 3 do financeiro de importação (a Fase 1 — valor final da trading — saiu na v13.67).
 
-Todo o financeiro media a dívida contra o **FOB** — mas o que você paga é o **valor final da trading** (FOB + impostos + frete + tudo, multiplicador ~1,5–1,8). Nos seus dados reais o sistema subestimava em **~$33.000** só em dois pedidos. Com a planilha da VALENTINA/CASSANDRA como teste: o certo é faltar **$8.885,63**; o sistema antigo diria **$4.963,43**. Daí ele nunca ter servido pra decidir nada.
+## 🏦 Caixinhas (Fase 2)
 
-## ✅ O que passou a existir
+No painel financeiro de cada pedido, seção **"🏦 Já guardado pra este pedido"**:
 
-**💵 Valores da trading** — botão novo no detalhe do pedido. Abre uma tela com **todas as linhas** (produto · cor · qtd · FOB) pra você digitar o **valor final por peça** que a importadora mandou:
+- **+ Caixinha**: valor em R$, banco/onde está e se está **rendendo** (marcável depois com um clique: 📈 rendendo ⇄ 💤 parado).
+- Quantas quiser por pedido (ex.: R$ 30.000 no Itaú + R$ 20.000 na Cora).
+- Mostra na hora: **"Cobre 64% do que falta (R$ 46.916) · faltam captar R$ 16.916"**, barra de cobertura, e quanto do guardado está rendendo. Quando cobre tudo: **"✓ O que falta já está todo guardado"**.
 
-- **Valor base por produto** que as cores herdam + **override por cor** quando a trading manda diferente (na sua planilha, VALENTINA 1B/2/COPPER = $25,76 e TT2-CARMEL = $27,90 — exatamente esse caso).
-- **Multiplicador ao vivo** em cada linha (×1,52, ×1,42…) e o **médio do pedido** (×1,501 no teste).
-- **Total da compra** em USD e em BRL, com o câmbio do pedido.
-- Contador **"linhas confirmadas 4/4"** — o que ainda não tem valor da trading segue como **estimativa** (FOB × fator) e é marcado como tal. Estimativa nunca se disfarça de número real.
-- Atalho opcional: aplicar um fator só nas linhas vazias.
+A reserva é em reais (é dinheiro no banco) e a dívida em dólar — a comparação usa o câmbio do pedido (orçado, ou o médio efetivo dos seus pagamentos).
 
-**Painel financeiro do pedido reescrito** — 4 blocos: **FOB (fábrica)** com o fator · **TOTAL DA COMPRA** (o que você deve, USD e BRL) · **PAGO** · **FALTA PAGAR** (USD e BRL), mais barra de quitação, câmbio médio efetivo dos seus pagamentos e aviso quando parte é estimativa.
+## 🚢 Aba "Importações" (Fase 3)
 
-**Financeiro consolidado**: o card virou **"FALTA PAGAR (TUDO)"** com o valor em USD **e em BRL**, quantos pedidos e quantos ainda estão sem valor da trading. Projeções e análise passaram a usar o valor final automaticamente.
+Nova aba no Financeiro, com **o compromisso total** em cima:
 
-**Pagamentos**: já funcionavam do jeito que você precisa (quantos quiser, data, banco, comprovante, e BRL↔USD pela cotação do dia) — agora eles abatem do **total certo**.
+- **FALTA PAGAR EM TODOS OS PEDIDOS** em USD **e** em BRL, com total comprado, já pago e quantos pedidos.
+- Aviso de quanto desse valor ainda é **estimativa** (pedidos sem os valores da trading) vs **confirmado**.
+- **JÁ GUARDADO (CAIXINHAS)** · **COBERTURA %** · **PRECISO CAPTAR** — a resposta pra "tenho o dinheiro ou preciso correr?".
+- **Pedido por pedido**: falta em USD/BRL, total, % pago, fator, caixinha e cobertura, chegada prevista, 🚨 nos concluídos sem quitar — cada linha abre o pedido.
+- Barra dupla por pedido: verde = pago · azul = guardado em caixinha · cinza = a captar.
 
-## 🗄️ Banco
-
-`order_items.final_price_usd` (unitário) + `colors[].final_price_usd` (override por cor), espelhando a estrutura que o FOB já tinha. RPC atualizado. Migração `sql/25` aplicada em produção.
+Atalho novo na Visão Geral: **"Quanto devo em tudo"**.
 
 ## ✅ Verificações
 
-- 10 testes novos com os números reais da sua planilha (final por cor sobrescreve o do item; total = soma(final × qtd); multiplicador; pedido misto confirmado/estimado; **"pagar só o FOB não quita"**; consolidado com crítico primeiro)
-- Testado no navegador com VALENTINA + CASSANDRA: FOB $7.823,40 · total final $11.745,60 · ×1,501 · 460 peças · falta **$8.885,63 ≈ R$ 46.916** · câmbio médio efetivo 5,28 — tudo conferido na mão
-- 3 testes antigos que codificavam o comportamento errado foram reescritos (documentando a mudança de semântica)
-- ESLint 0 erros, build OK, 246/247 testes (o 1 é o pré-existente de fuso)
+- 6 testes novos de reservas (soma só valores válidos, cobertura, cap em 100%, separa rendendo de parado, sem reservas não quebra, consolidado devo × guardado × captar) — 252/253 no total (o 1 é o pré-existente de fuso)
+- Testado no navegador com o pedido real: falta R$ 46.916 → caixinha de R$ 30.000 no Itaú deu **64% de cobertura e R$ 16.916 a captar**; toggle rendendo→parado zerou o "rendendo" mantendo o reservado; segunda caixinha de R$ 20.000 levou a **100% coberto**
+- ESLint 0 erros, build OK · migração `sql/26` aplicada em produção
 
-## 🗓️ Próximas fases (já decididas com a dona)
+## 🗄️ Banco
 
-- **Fase 2**: caixinha/reserva **por pedido** (quanto já está guardado, em qual banco, rendendo) + % coberto
-- **Fase 3**: painel consolidado inteligente — quanto devo no total vs quanto tenho reservado, timeline de vencimentos, alertas
+`orders.reserves` JSONB — `[{amount_brl, bank, yields, note}]`, sanitizado na gravação (só valor positivo entra).
 
-## 📋 Pendências do usuário (seguem valendo)
+## 📋 Pendências do usuário
 
 - Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase

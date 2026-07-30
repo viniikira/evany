@@ -9,6 +9,7 @@ import {
   computeUnpaidOrders, computeMissingReceipts, computeMonthlyTrend,
   computeCashflowProjection, sumRemaining,
   computeOrderLines, computeOrderFinal, computeOrderBalance, computePendingSummary,
+  computeOrderReserved, computeReserveCoverage,
 } from './financial'
 
 // Helpers pra montar fixtures
@@ -536,5 +537,83 @@ describe('valor final da trading', () => {
     ], 5.2)
     expect(s.orders).toHaveLength(0)
     expect(s.totalRemainingUsd).toBe(0)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+// v13.68 — CAIXINHAS / RESERVAS por pedido
+// ═══════════════════════════════════════════════════════════════════
+describe('caixinhas (reservas) por pedido', () => {
+  // Pedido: final 10.000, pagou 2.000 → falta 8.000 USD × 5,00 = R$ 40.000
+  const base = {
+    id: 'r1', status: 'manufacturing', budget_rate: 5,
+    items: [{ id: 'i1', price_usd: 10, final_price_usd: 10, colors: [{ code: 'A', qty: 1000 }] }],
+    payments: [{ amount_usd: 2000 }],
+  }
+
+  it('soma o que está guardado (só valores válidos)', () => {
+    const o = { ...base, reserves: [
+      { amount_brl: 20000, bank: 'Itaú', yields: true },
+      { amount_brl: 5000, bank: 'Cora', yields: false },
+      { amount_brl: 0, bank: 'ignorar' },
+      { amount_brl: null },
+    ] }
+    expect(computeOrderReserved(o)).toBe(25000)
+  })
+
+  it('cobertura: quanto do que falta já está reservado', () => {
+    const o = { ...base, reserves: [{ amount_brl: 20000, bank: 'Itaú', yields: true }] }
+    const b = computeOrderBalance(o, 5)
+    expect(b.remainingUsd).toBeCloseTo(8000, 2)
+    expect(b.remainingBrl).toBeCloseTo(40000, 2)
+    expect(b.reservedBrl).toBe(20000)
+    expect(b.yieldingBrl).toBe(20000)      // marcado como rendendo
+    expect(b.coveragePercent).toBeCloseTo(50, 2)
+    expect(b.toRaiseBrl).toBeCloseTo(20000, 2)  // ainda preciso captar
+    expect(b.isCovered).toBe(false)
+  })
+
+  it('reserva maior que a dívida = coberto (cap em 100%)', () => {
+    const o = { ...base, reserves: [{ amount_brl: 60000, bank: 'Itaú' }] }
+    const b = computeOrderBalance(o, 5)
+    expect(b.isCovered).toBe(true)
+    expect(b.coveragePercent).toBe(100)
+    expect(b.toRaiseBrl).toBe(0)
+  })
+
+  it('separa o que está rendendo do que está parado', () => {
+    const o = { ...base, reserves: [
+      { amount_brl: 30000, bank: 'Itaú', yields: true },
+      { amount_brl: 10000, bank: 'Conta corrente', yields: false },
+    ] }
+    const b = computeOrderBalance(o, 5)
+    expect(b.reservedBrl).toBe(40000)
+    expect(b.yieldingBrl).toBe(30000)
+  })
+
+  it('sem reservas não quebra nada', () => {
+    const b = computeOrderBalance(base, 5)
+    expect(b.reservedBrl).toBe(0)
+    expect(b.coveragePercent).toBe(0)
+    expect(b.toRaiseBrl).toBeCloseTo(40000, 2)
+  })
+
+  it('consolidado: devo × tenho guardado × falta captar', () => {
+    const o1 = { ...base, reserves: [{ amount_brl: 20000, bank: 'Itaú', yields: true }] }
+    const o2 = {
+      id: 'r2', status: 'completed', budget_rate: 5,
+      items: [{ id: 'x', price_usd: 10, colors: [{ code: 'A', qty: 100 }] }],  // estimado: 10×1.65×100 = 1650
+      payments: [],
+      reserves: [{ amount_brl: 5000, bank: 'Cora', yields: false }],
+    }
+    const s = computePendingSummary([o1, o2], 5)
+    expect(s.totalRemainingUsd).toBeCloseTo(8000 + 1650, 2)
+    expect(s.totalRemainingBrl).toBeCloseTo(40000 + 8250, 2)
+    expect(s.totalReservedBrl).toBe(25000)
+    expect(s.totalYieldingBrl).toBe(20000)
+    expect(s.toRaiseBrl).toBeCloseTo(48250 - 25000, 2)
+    expect(s.coveragePercent).toBeCloseTo(25000 / 48250 * 100, 2)
+    expect(s.estimatedCount).toBe(1)   // o o2 ainda é estimativa
+    expect(s.criticalCount).toBe(1)    // o2 é completed com saldo
   })
 })

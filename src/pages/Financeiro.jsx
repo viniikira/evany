@@ -19,10 +19,13 @@ import {
   flattenPayments, filterPaymentsByPeriod, computeAvgRate, computeTotals,
   computeRateComparison, topFactoriesByGasto, computeUnpaidOrders,
   computeMissingReceipts, computeMonthlyTrend, computeCashflowProjection, sumRemaining,
+  computePendingSummary,
 } from '../lib/financial'
 
 const TABS = [
   { id: 'visao-geral', label: 'Visão Geral', icon: '📊' },
+  // v13.68 — o compromisso total das importações: devo × pago × guardado
+  { id: 'importacoes', label: 'Importações', icon: '🚢' },
   { id: 'pagamentos',  label: 'Pagamentos',  icon: '💸' },
   { id: 'cambio',      label: 'Câmbio',      icon: '💱' },
   { id: 'analise',     label: 'Análise',     icon: '🔍' },
@@ -137,10 +140,144 @@ export function FinanceiroPage({ perm, rate, onOrderClick }) {
       )}
       
       {tab === 'visao-geral' && <TabVisaoGeral orders={orders} payments={periodPayments} period={periodCfg} setTab={setTab} onOrderClick={onOrderClick} rate={rate} />}
+      {tab === 'importacoes' && <TabImportacoes orders={orders} rate={rate} onOrderClick={onOrderClick} />}
       {tab === 'pagamentos' && <TabPagamentos allPayments={allPayments} orders={orders} onOrderClick={onOrderClick} />}
       {tab === 'cambio' && <TabCambio allPayments={allPayments} payments={periodPayments} period={periodCfg} />}
       {tab === 'analise' && <TabAnalise orders={orders} payments={periodPayments} onOrderClick={onOrderClick} rate={rate} />}
       {tab === 'projecoes' && <TabProjecoes orders={orders} onOrderClick={onOrderClick} />}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v13.68 — ABA IMPORTAÇÕES: o compromisso financeiro completo.
+// Responde de uma vez: quanto devo em TODOS os pedidos (USD e BRL),
+// quanto já paguei, quanto já está guardado em caixinha e quanto ainda
+// preciso captar — pedido por pedido, com o que ainda é estimativa.
+// ═══════════════════════════════════════════════════════════════════
+function TabImportacoes({ orders, rate, onOrderClick }) {
+  const s = useMemo(() => computePendingSummary(orders, rate), [orders, rate])
+  const fmtR$ = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR')
+  const fmt$ = (n) => '$ ' + (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  if (s.orders.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>🚢</div>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>Nenhum pedido com saldo em aberto</div>
+        <div className="text-muted" style={{ fontSize: 12 }}>Tudo pago — ou os pedidos ainda são rascunho.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* O número que importa: quanto falta pagar em tudo */}
+      <div style={{
+        padding: 16, borderRadius: 12, marginBottom: 14,
+        background: 'linear-gradient(135deg,#FEF2F2,#FFF7ED)',
+        border: '1px solid #FCA5A5',
+      }}>
+        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, color: '#991B1B', fontWeight: 700 }}>
+          Falta pagar em todos os pedidos
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap', marginTop: 4 }}>
+          <div style={{ fontSize: 30, fontWeight: 800, color: '#DC2626' }}>{fmt$(s.totalRemainingUsd)}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: '#991B1B' }}>≈ {fmtR$(s.totalRemainingBrl)}</div>
+        </div>
+        <div style={{ fontSize: 12, color: '#7C2D12', marginTop: 6, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <span>{s.orders.length} pedido(s) em aberto</span>
+          <span>· total comprado {fmt$(s.totalFinal)}</span>
+          <span>· já pago {fmt$(s.totalPaid)}</span>
+          {s.criticalCount > 0 && <span style={{ color: '#DC2626', fontWeight: 700 }}>· 🚨 {s.criticalCount} concluído(s) sem quitar</span>}
+        </div>
+        {s.estimatedCount > 0 && (
+          <div style={{ fontSize: 11.5, color: '#92400E', marginTop: 6, padding: '6px 10px', background: '#FFFBEB', border: '1px dashed #FBBF24', borderRadius: 6 }}>
+            ⚠️ <strong>{fmt$(s.estimatedRemaining)}</strong> desse valor é <strong>estimativa</strong> ({s.estimatedCount} pedido(s) ainda sem os valores da trading) ·
+            confirmado: <strong>{fmt$(s.confirmedRemaining)}</strong>
+          </div>
+        )}
+      </div>
+
+      {/* Caixa: guardado vs a captar */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 18 }}>
+        <Metric label="JÁ GUARDADO (CAIXINHAS)" value={fmtR$(s.totalReservedBrl)}
+          sub={s.totalYieldingBrl > 0 ? `📈 ${fmtR$(s.totalYieldingBrl)} rendendo` : 'nada marcado como rendendo'}
+          color="#0891B2" />
+        <Metric label="COBERTURA" value={`${Math.round(s.coveragePercent)}%`}
+          sub="do que falta já está separado" color={s.coveragePercent >= 100 ? '#059669' : (s.coveragePercent >= 50 ? '#0891B2' : '#F59E0B')} />
+        <Metric label="PRECISO CAPTAR" value={fmtR$(s.toRaiseBrl)}
+          sub={s.toRaiseBrl > 0 ? 'além do que já está guardado' : 'tudo coberto ✓'}
+          color={s.toRaiseBrl > 0 ? '#DC2626' : '#059669'} />
+      </div>
+
+      {/* Barra de cobertura global */}
+      {s.totalRemainingBrl > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ height: 12, borderRadius: 7, background: '#FEE2E2', overflow: 'hidden', display: 'flex' }}>
+            <div style={{
+              width: `${Math.min(100, s.coveragePercent)}%`,
+              background: s.coveragePercent >= 100 ? '#059669' : '#0891B2',
+              transition: 'width .5s',
+            }} />
+          </div>
+          <div className="text-muted" style={{ fontSize: 10.5, marginTop: 4 }}>
+            azul = já guardado em caixinha · vermelho = ainda preciso captar
+          </div>
+        </div>
+      )}
+
+      {/* Pedido por pedido */}
+      <div className="card">
+        <div className="card-title">Por pedido</div>
+        {s.orders.map(o => {
+          const covered = o.isCovered
+          return (
+            <div
+              key={o.id}
+              onClick={() => onOrderClick?.(o)}
+              style={{
+                padding: '10px 0', borderBottom: '1px solid var(--border-light, var(--border))',
+                cursor: onOrderClick ? 'pointer' : 'default',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: o.isCritical ? '#991B1B' : 'var(--text)' }}>
+                  {o.isCritical && '🚨 '}{o.order_name}
+                  <span className="text-muted" style={{ fontWeight: 400, fontSize: 11, marginLeft: 6 }}>
+                    {o.factory}
+                    {o.expected_arrival && ` · chega ${formatDate(o.expected_arrival, 'short')}`}
+                    {!o.isFullyConfirmed && <span title="Ainda sem os valores da trading — total estimado"> · ⚠ estimado</span>}
+                  </span>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#DC2626' }}>{fmt$(o.remainingUsd)}</div>
+                  {o.remainingBrl > 0 && <div className="text-muted" style={{ fontSize: 11 }}>≈ {fmtR$(o.remainingBrl)}</div>}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-muted, #6b7280)', marginTop: 3 }}>
+                <span>total {fmt$(o.total)}</span>
+                <span>· pago {Math.round(o.percentPaid)}%</span>
+                {o.multiplier && <span>· fator ×{o.multiplier.toFixed(2)}</span>}
+                {o.reservedBrl > 0 && (
+                  <span style={{ color: covered ? '#059669' : '#0891B2', fontWeight: 600 }}>
+                    · 🏦 {fmtR$(o.reservedBrl)} guardado{covered ? ' (cobre tudo ✓)' : ` (${Math.round(o.coveragePercent)}%)`}
+                  </span>
+                )}
+                {o.reservedBrl === 0 && <span>· sem caixinha</span>}
+              </div>
+              {/* Barra dupla: pago + coberto por reserva */}
+              <div style={{ height: 6, borderRadius: 4, background: 'var(--border-light, #eee)', overflow: 'hidden', marginTop: 6, display: 'flex' }}>
+                <div style={{ width: `${Math.min(100, o.percentPaid)}%`, background: '#059669' }} title={`${Math.round(o.percentPaid)}% pago`} />
+                <div style={{ width: `${Math.min(100 - Math.min(100, o.percentPaid), (100 - o.percentPaid) * (o.coveragePercent / 100))}%`, background: '#7DD3FC' }} title="coberto por caixinha" />
+              </div>
+            </div>
+          )
+        })}
+        <div className="text-muted" style={{ fontSize: 10.5, marginTop: 8 }}>
+          verde = já pago · azul claro = guardado em caixinha · cinza = ainda preciso captar
+        </div>
+      </div>
     </div>
   )
 }
@@ -197,6 +334,7 @@ function TabVisaoGeral({ orders, payments, period, setTab, onOrderClick, rate })
         <Shortcut icon="💸" title="Ver todos pagamentos" desc="Lista filtrada com ordenação" onClick={() => setTab('pagamentos')} />
         <Shortcut icon="💱" title="Análise de câmbio" desc="Comparativos e tendências" onClick={() => setTab('cambio')} />
         <Shortcut icon="🔍" title="Onde tenho pendências" desc="Atrasados e comprovantes faltando" onClick={() => setTab('analise')} />
+        <Shortcut icon="🚢" title="Quanto devo em tudo" desc="Importações: devo, guardado e a captar" onClick={() => setTab('importacoes')} />
         <Shortcut icon="🔮" title="O que preciso pagar" desc="Próximos 30/60/90 dias" onClick={() => setTab('projecoes')} />
       </div>
       
