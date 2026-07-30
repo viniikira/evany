@@ -339,12 +339,20 @@ export async function getShopifyCache() {
 // pedidos/6m), o payload cru de vários MB estourava a gravação e o sync
 // morria no fim perdendo tudo.
 export async function setShopifyCache(products, orders) {
+  const slimP = slimShopifyProducts(products)
+  const slimO = slimShopifyOrders(orders)
   const { error } = await supabase
     .from('shopify_cache')
     .update({
-      products: slimShopifyProducts(products),
-      orders: slimShopifyOrders(orders),
+      products: slimP,
+      orders: slimO,
       last_sync: new Date().toISOString(),
+      // v13.69 — registra que foi manual (o cron marca 'cron')
+      last_sync_source: 'manual',
+      last_sync_ok: true,
+      last_sync_error: null,
+      products_count: slimP.length,
+      orders_count: slimO.length,
     })
     .eq('id', 1)
   if (error) throw error
@@ -353,11 +361,14 @@ export async function setShopifyCache(products, orders) {
 // v13.66 — salvamento parcial: produtos garantidos mesmo se a fase de pedidos
 // falhar depois (mantém os orders antigos no cache).
 export async function setShopifyCacheProducts(products) {
+  const slimP = slimShopifyProducts(products)
   const { error } = await supabase
     .from('shopify_cache')
     .update({
-      products: slimShopifyProducts(products),
+      products: slimP,
       last_sync: new Date().toISOString(),
+      last_sync_source: 'manual',
+      products_count: slimP.length,
     })
     .eq('id', 1)
   if (error) throw error

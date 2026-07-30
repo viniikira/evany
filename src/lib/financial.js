@@ -215,7 +215,10 @@ export function computeOrderBalance(order, rate) {
   const fin = computeOrderFinal(order)
   const paidUsd = computeOrderPaid(order)
   const paidBrl = (order?.payments || []).reduce((a, p) => a + (num(p.amount_brl) || 0), 0)
-  const remainingUsd = fin.total - paidUsd
+  // v13.69 — quitado à mão: pedidos antigos foram pagos fora do sistema.
+  // A marcação da dona vale mais que a soma dos pagamentos lançados.
+  const isManuallySettled = !!order?.settled_at
+  const remainingUsd = isManuallySettled ? 0 : fin.total - paidUsd
   // Câmbio pra projetar o que falta: média efetiva já paga > câmbio orçado > cotação atual
   const avgRate = paidUsd > 0 && paidBrl > 0 ? paidBrl / paidUsd : null
   const projRate = num(order?.budget_rate) || avgRate || num(rate) || 0
@@ -227,8 +230,11 @@ export function computeOrderBalance(order, rate) {
     projRate,
     remainingUsd,
     remainingBrl: projRate > 0 ? remainingUsd * projRate : null,
-    percentPaid: fin.total > 0 ? (paidUsd / fin.total) * 100 : 0,
-    isSettled: fin.total > 0 && remainingUsd <= 0.01,
+    percentPaid: isManuallySettled ? 100 : (fin.total > 0 ? (paidUsd / fin.total) * 100 : 0),
+    isSettled: isManuallySettled || (fin.total > 0 && remainingUsd <= 0.01),
+    isManuallySettled,
+    settledAt: order?.settled_at || null,
+    settledNote: order?.settled_note || null,
     // v13.68 — caixinhas: quanto do que falta já está guardado
     ...computeReserveCoverage(order, projRate > 0 ? remainingUsd * projRate : null),
   }

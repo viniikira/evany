@@ -226,8 +226,27 @@ export default function ShopifyPage({ user, perm }) {
 
   return <div>
     <div className="toolbar">
-      <div><div className="text-muted text-sm">{systemSkus.length} SKUs no sistema · {linked.length} vinculados</div></div>
-      <button className="btn btn-primary" onClick={syncAll} disabled={syncing}>{syncing ? '⏳ Sincronizando...' : '🔄 Sync Shopify'}</button>
+      <div>
+        <div className="text-muted text-sm">{systemSkus.length} SKUs no sistema · {linked.length} vinculados</div>
+        {/* v13.69 — o sync agora roda sozinho toda noite; aqui a prova disso */}
+        {cache.last_sync && (() => {
+          const ageH = Math.floor((Date.now() - new Date(cache.last_sync)) / 3600000)
+          const quando = ageH < 1 ? 'agora há pouco' : (ageH < 24 ? `há ${ageH}h` : `há ${Math.floor(ageH / 24)}d`)
+          const auto = cache.last_sync_source === 'cron'
+          const falhou = cache.last_sync_ok === false
+          return (
+            <div style={{ fontSize: 11, marginTop: 2, color: falhou ? '#991B1B' : (ageH > 48 ? '#B45309' : 'var(--text-muted, #6b7280)') }}>
+              {falhou ? '⚠️' : (auto ? '🌙' : '👤')} última sincronização {quando}
+              {auto ? ' (automática)' : ' (manual)'}
+              {cache.products_count ? ` · ${cache.products_count} produtos` : ''}
+              {cache.orders_count ? ` · ${cache.orders_count} pedidos` : ''}
+              {falhou && cache.last_sync_error ? ` · falhou: ${String(cache.last_sync_error).slice(0, 90)}` : ''}
+              {!falhou && <span style={{ opacity: .8 }}> · roda sozinho todo dia 00:30</span>}
+            </div>
+          )
+        })()}
+      </div>
+      <button className="btn btn-primary" onClick={syncAll} disabled={syncing}>{syncing ? '⏳ Sincronizando...' : '🔄 Sync completo agora'}</button>
     </div>
     {/* v13.38 — Feedback visual melhorado:
         - Syncing: ProgressBar indeterminado + label de progresso

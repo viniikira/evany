@@ -70,6 +70,42 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
       await onRefresh()
     } catch (e) { toastError(toast, e, 'Não foi possível salvar a caixinha') }
   }
+
+  // v13.69 — quitar/reabrir: pedidos antigos foram pagos fora do sistema
+  const toggleSettled = async () => {
+    if (bal.isManuallySettled) {
+      const ok = await confirm({
+        title: 'Reabrir cobrança deste pedido?',
+        message: 'Ele volta a contar como saldo em aberto no financeiro. Os pagamentos registrados continuam intactos.',
+        confirmLabel: 'Reabrir',
+      })
+      if (!ok) return
+      try {
+        await updateOrder(o.id, { settled_at: null, settled_note: null })
+        writeLog({ userId: user.id, userName: user.name, action: 'reabriu cobrança do pedido', target: o.order_name || o.factory, entityType: 'order', entityId: o.id })
+        await onRefresh()
+        toast.push('Pedido voltou pra em aberto', { kind: 'success' })
+      } catch (e) { toastError(toast, e) }
+      return
+    }
+    const falta = remainUsd > 0.01 ? `Ainda faltam $ ${remainUsd.toFixed(2)} pelos pagamentos registrados.` : 'Os pagamentos registrados já cobrem o total.'
+    const ok = await confirm({
+      title: 'Marcar como PAGO integralmente?',
+      message: `${falta}\n\nUse quando o pedido já foi pago (inclusive fora do sistema) e você não quer lançar os pagamentos antigos um por um.`,
+      details: 'O pedido sai do saldo em aberto do financeiro. Nada é apagado e dá pra reabrir depois.',
+      confirmLabel: '✓ Marcar como pago',
+    })
+    if (!ok) return
+    try {
+      await updateOrder(o.id, {
+        settled_at: new Date().toISOString(),
+        settled_note: `Quitado manualmente por ${user.name || 'admin'}`,
+      })
+      writeLog({ userId: user.id, userName: user.name, action: 'marcou pedido como pago integralmente', target: o.order_name || o.factory, details: falta, entityType: 'order', entityId: o.id })
+      await onRefresh()
+      toast.push('✓ Pedido marcado como pago', { kind: 'success' })
+    } catch (e) { toastError(toast, e) }
+  }
   
   const isM = o.status === 'manufacturing' || o.status === 'in_transit' || o.status === 'completed'
 
@@ -385,10 +421,35 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
           {/* Pagamentos - só admin */}
           {isM && perm.payments && (
             <div style={{ marginTop: 14, padding: 14, background: 'linear-gradient(135deg,#FFFBEB,#FEF9F0)', borderRadius: 10, border: '1px solid #FDE68A' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
                 <div className="card-title" style={{ margin: 0, color: '#92400E' }}>💰 Pagamentos ({(o.payments || []).length})</div>
-                <button className="btn btn-outline btn-sm" onClick={addPay}>+ Pagamento</button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {/* v13.69 — quitar pedidos antigos pagos fora do sistema */}
+                  {bal.total > 0 && (
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={toggleSettled}
+                      title={bal.isManuallySettled
+                        ? 'Este pedido está marcado como pago integralmente — clique pra reabrir a cobrança'
+                        : 'Marcar como pago integralmente (pra pedidos antigos já pagos fora do sistema)'}
+                    >{bal.isManuallySettled ? '↩ Reabrir cobrança' : '✓ Marcar como pago'}</button>
+                  )}
+                  <button className="btn btn-outline btn-sm" onClick={addPay}>+ Pagamento</button>
+                </div>
               </div>
+
+              {/* Selo de quitado manualmente */}
+              {bal.isManuallySettled && (
+                <div style={{ marginBottom: 10, padding: '8px 12px', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 8, fontSize: 12, color: '#065F46' }}>
+                  ✓ <strong>Pago integralmente</strong> — marcado em {formatDate(bal.settledAt, 'full')}.
+                  {(o.payments || []).length === 0
+                    ? ' Os pagamentos foram feitos fora do sistema.'
+                    : ` Registrados aqui: $ ${totalPaidUsd.toFixed(2)} de $ ${bal.total.toFixed(2)}.`}
+                  <span className="text-muted" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
+                    Este pedido não entra mais no saldo em aberto do financeiro.
+                  </span>
+                </div>
+              )}
               {(o.payments || []).map((p, i) => (
                 <PayRow
                   key={p.id}

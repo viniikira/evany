@@ -617,3 +617,59 @@ describe('caixinhas (reservas) por pedido', () => {
     expect(s.criticalCount).toBe(1)    // o2 é completed com saldo
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════
+// v13.69 — QUITAR PEDIDO à mão (pedidos antigos pagos fora do sistema)
+// ═══════════════════════════════════════════════════════════════════
+describe('quitação manual', () => {
+  const antigo = {
+    id: 'velho', status: 'completed', budget_rate: 5,
+    items: [{ id: 'i1', price_usd: 10, final_price_usd: 20, colors: [{ code: 'A', qty: 500 }] }],
+    payments: [],  // pagou tudo fora do sistema
+  }
+
+  it('sem quitar: dívida cheia em aberto', () => {
+    const b = computeOrderBalance(antigo, 5)
+    expect(b.total).toBe(10000)
+    expect(b.remainingUsd).toBe(10000)
+    expect(b.isSettled).toBe(false)
+    expect(b.isManuallySettled).toBe(false)
+  })
+
+  it('quitado à mão: zera o saldo e marca 100% pago', () => {
+    const b = computeOrderBalance({ ...antigo, settled_at: '2026-07-30T12:00:00Z' }, 5)
+    expect(b.total).toBe(10000)          // o valor da compra continua registrado
+    expect(b.remainingUsd).toBe(0)
+    expect(b.remainingBrl).toBe(0)
+    expect(b.percentPaid).toBe(100)
+    expect(b.isSettled).toBe(true)
+    expect(b.isManuallySettled).toBe(true)
+    expect(b.settledAt).toBe('2026-07-30T12:00:00Z')
+  })
+
+  it('quitado sai do saldo em aberto e do consolidado', () => {
+    const quitado = { ...antigo, settled_at: '2026-07-30T12:00:00Z' }
+    expect(computeUnpaidOrders([quitado], 5)).toEqual([])
+    const s = computePendingSummary([quitado], 5)
+    expect(s.orders).toHaveLength(0)
+    expect(s.totalRemainingUsd).toBe(0)
+    expect(s.criticalCount).toBe(0)
+  })
+
+  it('pagamentos parciais registrados são preservados ao quitar', () => {
+    const b = computeOrderBalance(
+      { ...antigo, settled_at: '2026-07-30T12:00:00Z', payments: [{ amount_usd: 3000, amount_brl: 15000 }] },
+      5,
+    )
+    expect(b.paidUsd).toBe(3000)         // histórico intacto
+    expect(b.paidBrl).toBe(15000)
+    expect(b.remainingUsd).toBe(0)       // mas não deve mais nada
+    expect(b.avgRate).toBe(5)
+  })
+
+  it('reabrir (settled_at nulo) volta a cobrar', () => {
+    const b = computeOrderBalance({ ...antigo, settled_at: null }, 5)
+    expect(b.remainingUsd).toBe(10000)
+    expect(b.isManuallySettled).toBe(false)
+  })
+})

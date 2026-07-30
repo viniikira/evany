@@ -1,39 +1,36 @@
-# KIRA v13.68 — Caixinhas por pedido + painel "quanto devo em tudo"
+# KIRA v13.69 — Shopify sincroniza sozinha + quitar pedido
 
-Fases 2 e 3 do financeiro de importação (a Fase 1 — valor final da trading — saiu na v13.67).
+## 🌙 Sync automático da Shopify (a dívida mais antiga da fila)
 
-## 🏦 Caixinhas (Fase 2)
+Uma edge function agora sincroniza a loja **toda noite às 00:30**, sem clique. Isso conserta a raiz de vários problemas: sugestão e "puxar SKU" liam dados de abril, o estoque no panorama da Produção estava velho, e a reposição por vendas dependia de você lembrar de sincronizar.
 
-No painel financeiro de cada pedido, seção **"🏦 Já guardado pra este pedido"**:
+**Descoberta no caminho**: a loja tem **737 produtos**, não 250 — o cache antigo estava truncado numa página só (a paginação nunca tinha funcionado até a v13.53).
 
-- **+ Caixinha**: valor em R$, banco/onde está e se está **rendendo** (marcável depois com um clique: 📈 rendendo ⇄ 💤 parado).
-- Quantas quiser por pedido (ex.: R$ 30.000 no Itaú + R$ 20.000 na Cora).
-- Mostra na hora: **"Cobre 64% do que falta (R$ 46.916) · faltam captar R$ 16.916"**, barra de cobertura, e quanto do guardado está rendendo. Quando cobre tudo: **"✓ O que falta já está todo guardado"**.
+**Arquitetura** (definida testando de verdade contra a sua loja):
+- **Produtos: sempre completos** (737, 3 páginas, ~10s) — é o que alimenta estoque e SKU. Salvos primeiro, de forma independente.
+- **Pedidos: incremental** — buscar os 4.500+ pedidos de 6 meses estoura o limite de 150s da edge function (testei: estourou). Então cada noite pega só os criados desde a última sincronização, com 2 dias de margem, e faz merge preservando o histórico da janela de 6 meses. Resultado real: **2,5 segundos**, 65 pedidos novos, 4.533 no total.
+- O **Sync completo** manual continua na aba Shopify (o navegador não tem limite de 150s) — pra reconstruir tudo quando quiser.
+- Se algo falhar, o erro fica registrado e aparece na tela.
 
-A reserva é em reais (é dinheiro no banco) e a dívida em dólar — a comparação usa o câmbio do pedido (orçado, ou o médio efetivo dos seus pagamentos).
+Na aba Shopify agora tem a **prova de vida**: "🌙 última sincronização há 2h (automática) · 737 produtos · 4.533 pedidos · roda sozinho todo dia 00:30". Fica âmbar se passar de 48h e vermelho se a última tentativa falhou.
 
-## 🚢 Aba "Importações" (Fase 3)
+## ✓ Quitar pedido (pedido antigo já pago)
 
-Nova aba no Financeiro, com **o compromisso total** em cima:
+Botão **"✓ Marcar como pago"** no painel de pagamentos. Pra pedidos antigos que você já pagou integralmente fora do sistema — sem precisar lançar cada pagamento retroativo.
 
-- **FALTA PAGAR EM TODOS OS PEDIDOS** em USD **e** em BRL, com total comprado, já pago e quantos pedidos.
-- Aviso de quanto desse valor ainda é **estimativa** (pedidos sem os valores da trading) vs **confirmado**.
-- **JÁ GUARDADO (CAIXINHAS)** · **COBERTURA %** · **PRECISO CAPTAR** — a resposta pra "tenho o dinheiro ou preciso correr?".
-- **Pedido por pedido**: falta em USD/BRL, total, % pago, fator, caixinha e cobertura, chegada prevista, 🚨 nos concluídos sem quitar — cada linha abre o pedido.
-- Barra dupla por pedido: verde = pago · azul = guardado em caixinha · cinza = a captar.
-
-Atalho novo na Visão Geral: **"Quanto devo em tudo"**.
+- O pedido **sai do saldo em aberto** e do consolidado de Importações (para de contar como dívida).
+- Nada é apagado: os pagamentos que já estavam registrados continuam lá, e o valor da compra segue no histórico.
+- Ganha um selo verde "Pago integralmente" com a data.
+- **Reversível**: "↩ Reabrir cobrança" volta a contar (com confirmação).
+- Fica registrado no log de atividades quem marcou e qual era o saldo na hora.
 
 ## ✅ Verificações
 
-- 6 testes novos de reservas (soma só valores válidos, cobertura, cap em 100%, separa rendendo de parado, sem reservas não quebra, consolidado devo × guardado × captar) — 252/253 no total (o 1 é o pré-existente de fuso)
-- Testado no navegador com o pedido real: falta R$ 46.916 → caixinha de R$ 30.000 no Itaú deu **64% de cobertura e R$ 16.916 a captar**; toggle rendendo→parado zerou o "rendendo" mantendo o reservado; segunda caixinha de R$ 20.000 levou a **100% coberto**
-- ESLint 0 erros, build OK · migração `sql/26` aplicada em produção
-
-## 🗄️ Banco
-
-`orders.reserves` JSONB — `[{amount_brl, bank, yields, note}]`, sanitizado na gravação (só valor positivo entra).
+- Sync testado contra a loja real: 401 sem login; execução via cron (`source: cron`) em **2.572ms** com ok=true, 737 produtos e 4.533 pedidos em 145 kB de cache; cron `kira-shopify-sync` agendado e confirmado na lista
+- 6 testes novos de quitação (zera saldo, marca 100%, sai do consolidado, preserva pagamentos parciais, reabrir volta a cobrar) — 257/258 no total (o 1 é o pré-existente de fuso)
+- ESLint 0 erros, build OK · migração `sql/27` aplicada em produção
 
 ## 📋 Pendências do usuário
 
 - Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase
+- Fila: conferência de recebimento · faxina técnica (teste de fuso, assistente no Produto, bundle split) · passada mobile

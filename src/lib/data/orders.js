@@ -255,6 +255,7 @@ function cleanOrderPayload(order) {
     'budget_rate','real_cost_brl','notes','expected_arrival','created_by',
     'promised_lead_days','manufacturing_started_at','order_date',
     'reserves',  // v13.68 — caixinhas em BRL guardadas pra este pedido
+    'settled_at','settled_note',  // v13.69 — quitação manual (pedidos pagos fora do sistema)
   ]
   const out = {}
   for (const k of allowed) {
