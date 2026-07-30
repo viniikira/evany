@@ -42,6 +42,25 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
     setDirty(true)
   }
 
+  // v13.70 — o FOB também é editável aqui: pedidos antigos foram criados sem
+  // preço, e sem FOB não há fator nem custo de fábrica. Grava no snapshot
+  // (que é o valor congelado usado por todo o financeiro) e no price_usd.
+  const setItemFob = (itemId, val) => {
+    setItems(prev => prev.map(it => it.id === itemId
+      ? { ...it, price_usd: val, price_usd_snapshot: val }
+      : it))
+    setDirty(true)
+  }
+  const setColorFob = (itemId, idx, val) => {
+    setItems(prev => prev.map(it => {
+      if (it.id !== itemId) return it
+      const cls = [...(it.colors || [])]
+      cls[idx] = { ...cls[idx], price_usd: val }
+      return { ...it, colors: cls }
+    }))
+    setDirty(true)
+  }
+
   // Aplica um fator nas linhas AINDA VAZIAS (atalho — não sobrescreve nada)
   const applyBulkFactor = () => {
     const f = parseFloat(bulkFactor)
@@ -100,12 +119,12 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
 
   return (
     <Modal onClose={onClose} width={820} isDirty={dirty} zIndex={960}>
-      <MH title="💵 Valores finais da trading" onClose={onClose} />
+      <MH title="💵 Valores do pedido — FOB e final da trading" onClose={onClose} />
       <MB>
         <div style={{ fontSize: 12, color: 'var(--text-muted, #6b7280)', marginBottom: 12, lineHeight: 1.5 }}>
-          Digite o <strong>valor final por peça</strong> que a importadora passou (já com impostos, frete e tudo).
-          É esse valor que o sistema vai usar como <strong>o que você deve</strong> — o FOB continua guardado como custo de fábrica.
-          Linhas em branco ficam como <em>estimativa</em> (FOB × fator do pedido).
+          <strong>FOB</strong> = o que a fábrica cobra (custo de fábrica, editável aqui).
+          <strong>Final</strong> = o valor por peça que a importadora passou, já com impostos e frete — é esse que o sistema
+          usa como <strong>o que você deve</strong>. Linhas de final em branco ficam como <em>estimativa</em> (FOB × fator do pedido).
         </div>
 
         {/* Atalho: aplicar fator nas vazias */}
@@ -133,7 +152,7 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
           <div style={{ display: 'flex', gap: 10, padding: '6px 12px', background: 'var(--bg)', fontSize: 10, textTransform: 'uppercase', letterSpacing: .5, color: 'var(--text-muted, #6b7280)' }}>
             <div style={{ flex: 1 }}>Produto · cor</div>
             <div style={{ width: 60, textAlign: 'center' }}>qtd</div>
-            <div style={{ width: 74, textAlign: 'right' }}>FOB/un</div>
+            <div style={{ width: 74, textAlign: 'center' }}>FOB/un</div>
             <div style={{ width: 112, textAlign: 'center' }}>final/un</div>
             <div style={{ width: 52, textAlign: 'center' }}>fator</div>
             <div style={{ width: 92, textAlign: 'right' }}>total final</div>
@@ -170,8 +189,17 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
                   </span>
                 </div>
                 <div style={{ width: 60 }} />
-                <div style={{ width: 74, textAlign: 'right', fontSize: 12, color: 'var(--text-muted, #6b7280)' }}>
-                  {fobItem > 0 ? fmt$(fobItem) : '—'}
+                {/* FOB base do produto — editável (v13.70) */}
+                <div style={{ width: 74, display: 'flex', alignItems: 'center', gap: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '0 6px', height: 30, background: 'var(--surface)' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted, #6b7280)' }}>$</span>
+                  <input
+                    type="number" step="0.01" min="0"
+                    value={it.price_usd_snapshot ?? it.price_usd ?? ''}
+                    onChange={e => setItemFob(it.id, e.target.value)}
+                    aria-label={`FOB base de ${info.name}`}
+                    placeholder="—"
+                    style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 12, color: 'var(--text)' }}
+                  />
                 </div>
                 <div style={{ width: 112, display: 'flex', alignItems: 'center', gap: 2, border: `1px solid ${itemFinalNum > 0 ? '#059669' : 'var(--border)'}`, borderRadius: 8, padding: '0 8px', height: 30, background: itemFinalNum > 0 ? '#F0FDF4' : 'var(--surface)' }}>
                   <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>$</span>
@@ -226,8 +254,18 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
                     </span>
                   </div>
                   <div style={{ width: 60, textAlign: 'center', fontSize: 12, fontWeight: 600 }}>{qty}</div>
-                  <div style={{ width: 74, textAlign: 'right', fontSize: 12, color: 'var(--text-muted, #6b7280)' }}>
-                    {fob > 0 ? fmt$(fob) : '—'}
+                  {/* FOB da linha — editável; vazio herda o do produto (v13.70) */}
+                  <div style={{ width: 74, display: 'flex', alignItems: 'center', gap: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '0 6px', height: 30, background: 'var(--surface)' }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-muted, #6b7280)' }}>$</span>
+                    <input
+                      type="number" step="0.01" min="0"
+                      value={isColor ? (row.c.price_usd ?? '') : (it.price_usd_snapshot ?? it.price_usd ?? '')}
+                      placeholder={isColor && fobItem > 0 ? fobItem.toFixed(2) : '—'}
+                      onChange={e => isColor ? setColorFob(it.id, row.idx, e.target.value) : setItemFob(it.id, e.target.value)}
+                      aria-label={`FOB ${isColor ? 'da cor ' + row.c.code : 'do item'} ${info.name}`}
+                      title={isColor ? 'Vazio herda o FOB do produto' : undefined}
+                      style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 12, color: 'var(--text)' }}
+                    />
                   </div>
                   <div style={{ width: 112, display: 'flex', alignItems: 'center', gap: 2, border: `1px solid ${hasOwn ? '#059669' : 'var(--border)'}`, borderRadius: 8, padding: '0 8px', height: 30, background: hasOwn ? '#F0FDF4' : 'var(--surface)' }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>$</span>

@@ -1,3 +1,5 @@
+import { parseDateLocal } from './utils'
+
 // src/lib/financial.js
 // Cálculos financeiros centralizados — reusados pela tela Financeiro (todas as abas).
 // Tudo client-side baseado em orders já em memória. Sem RPC.
@@ -27,7 +29,7 @@ export function filterPaymentsByPeriod(payments, days) {
   return payments.filter(p => {
     const date = p.payment_date || p.created_at
     if (!date) return false
-    const t = new Date(date).getTime()
+    const t = parseDateLocal(date)?.getTime()
     return !isNaN(t) && t >= cutoff
   })
 }
@@ -59,7 +61,7 @@ export function computeRateComparison(allPayments, days) {
   const inWindow = (p, from, to) => {
     const date = p.payment_date || p.created_at
     if (!date) return false
-    const t = new Date(date).getTime()
+    const t = parseDateLocal(date)?.getTime()
     return !isNaN(t) && t >= from && t < to
   }
   
@@ -391,8 +393,8 @@ export function computeMonthlyTrend(payments, monthsBack = 12) {
   for (const p of payments) {
     const date = p.payment_date || p.created_at
     if (!date) continue
-    const t = new Date(date).getTime()
-    if (isNaN(t) || t < cutoff) continue
+    const t = parseDateLocal(date)?.getTime()
+    if (t == null || isNaN(t) || t < cutoff) continue
     const d = new Date(t)
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     if (!map.has(key)) map.set(key, { month: key, usd: 0, brl: 0, count: 0 })
@@ -427,8 +429,8 @@ export function computeCashflowProjection(orders) {
       buckets.noDate.push(u)
       continue
     }
-    const arr = new Date(u.expected_arrival).getTime()
-    if (isNaN(arr)) {
+    const arr = parseDateLocal(u.expected_arrival)?.getTime()
+    if (arr == null || isNaN(arr)) {
       buckets.noDate.push(u)
       continue
     }

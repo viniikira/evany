@@ -1,7 +1,7 @@
 // src/lib/utils.test.js
 // Testes pra helpers puros: UC, uid, formatDate, runOncePerDay
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { UC, uid, formatDate, runOncePerDay } from './utils'
+import { UC, uid, formatDate, parseDateLocal, runOncePerDay } from './utils'
 
 describe('UC', () => {
   it('converte string em maiúsculas', () => {
@@ -70,6 +70,24 @@ describe('formatDate', () => {
     const d = new Date(DATE)
     const r = formatDate(d, 'short')
     expect(r).toMatch(/15/)
+  })
+
+  // v13.70 - colunas DATE do Postgres (order_date, expected_arrival, payment_date)
+  // chegam como 'YYYY-MM-DD'. Antes eram lidas como meia-noite UTC e o sistema
+  // mostrava um dia menos no Brasil.
+  it('data "so dia" nao volta um dia no fuso local', () => {
+    expect(formatDate('2026-06-10', 'full')).toBe('10/06/2026')
+    expect(formatDate('2026-01-01', 'iso')).toBe('2026-01-01')
+    expect(formatDate('2026-03-01', 'short')).toBe('01/03')
+  })
+
+  it('parseDateLocal monta a data no fuso local, sem deslocar', () => {
+    const d = parseDateLocal('2026-06-10')
+    expect(d.getFullYear()).toBe(2026)
+    expect(d.getMonth()).toBe(5)
+    expect(d.getDate()).toBe(10)
+    expect(parseDateLocal('')).toBe(null)
+    expect(parseDateLocal('not-a-date')).toBe(null)
   })
 })
 

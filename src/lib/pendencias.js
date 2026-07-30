@@ -1,3 +1,5 @@
+import { parseDateLocal } from './utils'
+
 // src/lib/pendencias.js
 // Sistema de awareness: calcula pendências automáticas a partir do estado atual.
 // Não tem feature nova — só agrega dados existentes em "coisas pra fazer".
@@ -248,8 +250,8 @@ export function computeOrderDelay(order, leadTimeByFactory = new Map()) {
   }
   
   const now = new Date()
-  const start = new Date(startSource)
-  if (isNaN(start.getTime())) return null  // data corrompida
+  const start = parseDateLocal(startSource)
+  if (!start) return null  // data corrompida
   
   const daysElapsed = Math.floor((now - start) / 86400000)
   if (daysElapsed < 0) return null  // pedido futuro? proteção

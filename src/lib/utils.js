@@ -31,10 +31,24 @@ export function uid() {
 // ═══════════════════════════════════════════════════════════════════
 const MONTHS_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
 
+// v13.70 — datas "só dia" (colunas DATE do Postgres: order_date, expected_arrival,
+// payment_date) chegam como '2026-06-10'. new Date() lê isso como meia-noite UTC,
+// que no Brasil (UTC-3) é 21h do dia ANTERIOR — todo o sistema mostrava um dia
+// menos. Aqui montamos a data no fuso local pra bater com o que ela digitou.
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
+
+export function parseDateLocal(input) {
+  if (!input) return null
+  if (input instanceof Date) return input
+  const m = typeof input === 'string' ? input.match(DATE_ONLY) : null
+  const d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(input)
+  return isNaN(d.getTime()) ? null : d
+}
+
 export function formatDate(input, mode = 'short') {
   if (!input) return ''
-  const d = input instanceof Date ? input : new Date(input)
-  if (isNaN(d.getTime())) return ''
+  const d = parseDateLocal(input)
+  if (!d) return ''
   
   const dd = String(d.getDate()).padStart(2, '0')
   const mm = String(d.getMonth() + 1).padStart(2, '0')

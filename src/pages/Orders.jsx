@@ -6,6 +6,7 @@ import { CompletionSummaryModal } from '../components/orders/CompletionSummaryMo
 import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
+import { OrderCard } from '../components/orders/OrderCard'
 import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { OrderCreator } from '../components/orders/OrderCreator'
 import {
@@ -18,7 +19,7 @@ import { listFactories, listColors, addLog as writeLog } from '../lib/data/misc'
 import { trackAction } from '../lib/analytics'
 import { ORDER_ST } from '../lib/constants'
 import { useStickyFilter, clearStickyFilters } from '../lib/hooks'
-import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
+import { computeFactoryLeadTime } from '../lib/pendencias'
 import { uid, formatDate, UC } from '../lib/utils'
 import { toastError } from '../lib/errors'
 import { log } from '../lib/logger'
@@ -864,44 +865,17 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         })}
       </div>
     )
-    : <div className="grid-2">{filtered.map(o => {
-      const st = ORDER_ST.find(s => s.id === o.status)
-      const totalQty = (o.items || []).reduce((a, it) => {
-        const cls = it.colors || []
-        return a + cls.reduce((b, c) => b + Number(c.qty || 0), 0) + (cls.length === 0 ? Number(it.quantity || 0) : 0)
-      }, 0)
-      // #3 Calcula atraso pra mostrar badge no card
-      const delay = computeOrderDelay(o, leadTimeByFactory)
-      return (
-        <div key={o.id} className="card card-hover" onClick={() => setDetail(o)}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="card-title" style={{ margin: 0 }}>{o.order_name || o.factory}</div>
-              <div className="text-muted text-sm" title={o.order_date ? `Registrado no sistema em: ${formatDate(o.created_at, 'full')}` : undefined}>
-                {o.factory} · {formatDate(o.order_date || o.created_at, 'full')}{o.order_date ? ' 📅' : ''} · {totalQty} peças
-                {o.expected_arrival && ` · chegada ${formatDate(o.expected_arrival, 'full')}`}
-              </div>
-              {/* #3 Indicador de prazo/atraso pra pedidos em fabricação */}
-              {delay && delay.deadlineDays != null && (
-                <div style={{
-                  marginTop: 6, fontSize: 11, fontWeight: 600,
-                  color: delay.isLate ? '#DC2626' : (delay.daysElapsed > delay.deadlineDays * 0.8 ? '#D97706' : '#059669'),
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                }}>
-                  {delay.isLate
-                    ? <>⚠️ Atrasado {delay.daysLate} dia{delay.daysLate !== 1 ? 's' : ''}</>
-                    : <>⏱️ {delay.daysElapsed}/{delay.deadlineDays} dias</>}
-                  {delay.source === 'avg_with_tolerance' && (
-                    <span className="text-muted" style={{ fontWeight: 400, fontSize: 10 }}>(estimado)</span>
-                  )}
-                </div>
-              )}
-            </div>
-            <span className="chip" style={{ background: st?.color + '20', color: st?.color, whiteSpace: 'nowrap' }}>{st?.icon} {st?.label}</span>
-          </div>
-        </div>
-      )
-    })}</div>}
+    : <div className="grid-2">{filtered.map(o => (
+      <OrderCard
+        key={o.id}
+        order={o}
+        products={products}
+        perm={perm}
+        rate={rate}
+        leadTimeByFactory={leadTimeByFactory}
+        onClick={() => setDetail(o)}
+      />
+    ))}</div>}
 
     {creator && (
       <OrderCreator

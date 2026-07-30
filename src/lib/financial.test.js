@@ -28,7 +28,7 @@ const payment = (overrides = {}) => ({
   id: 'p1',
   amount_usd: '1000',
   amount_brl: '5000',
-  payment_date: '2026-03-15T00:00:00Z',
+  payment_date: '2026-03-15',
   receipt_url: null,
   bank: 'Wise',
   ...overrides,
@@ -59,7 +59,7 @@ describe('flattenPayments', () => {
 })
 
 describe('filterPaymentsByPeriod', () => {
-  const old = payment({ payment_date: '2024-01-01T00:00:00Z' })
+  const old = payment({ payment_date: '2024-01-01' })
   const recent = payment({ payment_date: new Date().toISOString() })
   
   it('retorna tudo se days é null/undefined', () => {
@@ -397,12 +397,15 @@ describe('computeCashflowProjection', () => {
   })
 })
 
+// payment_date é coluna DATE no Postgres: o Supabase devolve 'YYYY-MM-DD' (sem
+// hora). Os testes usam esse formato justamente porque é o que chega em produção
+// — com 'T00:00:00Z' o mês virava o anterior no fuso do Brasil (v13.70).
 describe('computeMonthlyTrend', () => {
   it('agrupa por YYYY-MM', () => {
     const ps = [
-      payment({ payment_date: '2026-01-15T00:00:00Z', amount_usd: '100', amount_brl: '500' }),
-      payment({ payment_date: '2026-01-25T00:00:00Z', amount_usd: '50',  amount_brl: '250' }),
-      payment({ payment_date: '2026-02-10T00:00:00Z', amount_usd: '200', amount_brl: '1000' }),
+      payment({ payment_date: '2026-01-15', amount_usd: '100', amount_brl: '500' }),
+      payment({ payment_date: '2026-01-25', amount_usd: '50',  amount_brl: '250' }),
+      payment({ payment_date: '2026-02-10', amount_usd: '200', amount_brl: '1000' }),
     ]
     const r = computeMonthlyTrend(ps, 12)
     expect(r).toHaveLength(2)
@@ -415,9 +418,9 @@ describe('computeMonthlyTrend', () => {
   
   it('ordena cronologicamente', () => {
     const ps = [
-      payment({ payment_date: '2026-03-01T00:00:00Z' }),
-      payment({ payment_date: '2026-01-01T00:00:00Z' }),
-      payment({ payment_date: '2026-02-01T00:00:00Z' }),
+      payment({ payment_date: '2026-03-01' }),
+      payment({ payment_date: '2026-01-01' }),
+      payment({ payment_date: '2026-02-01' }),
     ]
     const r = computeMonthlyTrend(ps)
     expect(r.map(x => x.month)).toEqual(['2026-01', '2026-02', '2026-03'])
