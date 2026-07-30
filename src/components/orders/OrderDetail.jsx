@@ -9,7 +9,9 @@ import { Modal, MH, MB, MF, Lightbox, useConfirm, useToast } from '../ui'
 import { ColorSwatch } from '../ColorSwatch'
 import { OrderTimeline } from '../OrderTimeline'
 import { PayRow } from './PayRow'
-import { addPayment, updatePayment, deletePayment } from '../../lib/data/orders'
+import { addPayment, updatePayment, deletePayment, updateOrder } from '../../lib/data/orders'
+import { computeOrderBalance } from '../../lib/financial'
+import { TradingValuesModal } from './TradingValuesModal'
 import { uploadReceipt, getReceiptSignedUrl, deleteReceipt } from '../../lib/storage'
 import { generateOrderPDF } from '../../lib/pdf'
 import { generateFactorySheet } from '../../lib/factorySheet'
@@ -41,17 +43,24 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
     }, 0)
     return a + fromColors + (cls.length === 0 ? pu * Number(it.quantity || 0) : 0)
   }, 0)
-  const totalPaidUsd = (o.payments || []).reduce((a, p) => a + parseFloat(p.amount_usd || 0), 0)
-  const remainUsd = budgetTotal - totalPaidUsd
-  
-  // #3 Cálculos em BRL — câmbio médio ponderado pelo USD pago em cada pagamento.
-  // Mostra realidade financeira em reais (saída do banco) além do valor em USD.
-  const totalPaidBrl = (o.payments || []).reduce((a, p) => a + parseFloat(p.amount_brl || 0), 0)
-  // Câmbio médio efetivo: BRL pago / USD pago. Se ainda não pagou nada, usa rate do app (prop)
-  const avgRate = totalPaidUsd > 0 ? totalPaidBrl / totalPaidUsd : (parseFloat(rate) || 0)
-  // Orçamento e restante em BRL projetados pelo câmbio médio efetivo (ou rate atual)
-  const budgetBrl = avgRate > 0 ? budgetTotal * avgRate : 0
-  const remainBrl = avgRate > 0 ? remainUsd * avgRate : 0
+  // v13.67 — a dívida é o VALOR FINAL da trading (FOB + impostos + frete),
+  // não o FOB. `bal` traz total final, confirmado vs estimado, pago e falta.
+  const bal = computeOrderBalance(o, rate)
+  const totalPaidUsd = bal.paidUsd
+  const remainUsd = bal.remainingUsd
+  const totalPaidBrl = bal.paidBrl
+  const avgRate = bal.avgRate || (parseFloat(rate) || 0)
+  const remainBrl = bal.remainingBrl || 0
+  const [tradingModal, setTradingModal] = useState(false)
+
+  const saveTradingValues = async (items) => {
+    try {
+      await updateOrder(o.id, { items })
+      setTradingModal(false)
+      await onRefresh()
+      toast.push('Valores da trading salvos', { kind: 'success' })
+    } catch (e) { toastError(toast, e, 'Não foi possível salvar os valores') }
+  }
   
   const isM = o.status === 'manufacturing' || o.status === 'in_transit' || o.status === 'completed'
 
@@ -183,6 +192,16 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
   return (
     <>
       <Lightbox src={lb} onClose={() => setLb(null)} />
+      {tradingModal && (
+        <TradingValuesModal
+          order={o}
+          products={products}
+          colors={colors}
+          rate={rate}
+          onSave={saveTradingValues}
+          onClose={() => setTradingModal(false)}
+        />
+      )}
       <Modal onClose={onClose} width={750} allowOutsideClose zIndex={zIndex}>
         <MH title={o.order_name || `Pedido · ${o.factory}`} onClose={onClose} actions={
           <>
@@ -201,6 +220,14 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 onClick={onDuplicate}
                 title="Abre a mesa de criação pré-carregada com estes itens — nada é criado até você salvar"
               >📋 Duplicar</button>
+            )}
+            {/* v13.67 — lançar os valores finais que a trading mandou */}
+            {perm.prices && !readOnly && (
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => setTradingModal(true)}
+                title="Lançar o valor final por peça que a importadora passou (é o que define quanto você deve)"
+              >💵 Valores da trading{!bal.isFullyConfirmed && bal.total > 0 ? ' ⚠' : ''}</button>
             )}
             {/* v13.47 Planilha da fábrica — contém FOB, só pra quem vê preços */}
             {perm.prices && (
@@ -366,54 +393,77 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
               ))}
               {(o.payments || []).length === 0 && <p className="text-muted text-sm" style={{ textAlign: 'center' }}>Nenhum pagamento.</p>}
 
-              {budgetTotal > 0 && (
+              {/* v13.67 — painel medido contra o VALOR FINAL da trading */}
+              {bal.total > 0 && (
                 <div style={{ marginTop: 12 }}>
-                  {/* Câmbio médio efetivo (se já houve pagamento) */}
-                  {avgRate > 0 && totalPaidUsd > 0 && (
-                    <div style={{ textAlign: 'center', marginBottom: 8, fontSize: 12 }}>
-                      <span className="text-muted">💱 Câmbio médio efetivo: </span>
-                      <strong style={{ color: 'var(--primary)' }}>R$ {avgRate.toFixed(4)}</strong>
+                  {/* Barra de quitação */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#92400E', marginBottom: 4 }}>
+                      <span>
+                        {Math.round(bal.percentPaid)}% pago
+                        {bal.isFullyConfirmed
+                          ? <span style={{ color: '#166534', fontWeight: 700 }}> · valores confirmados pela trading</span>
+                          : <span style={{ fontWeight: 700 }}> · ⚠ {bal.linesConfirmed}/{bal.linesTotal} linhas confirmadas (resto é estimativa)</span>}
+                      </span>
+                      {avgRate > 0 && totalPaidUsd > 0 && <span>💱 câmbio médio R$ {avgRate.toFixed(4)}</span>}
                     </div>
-                  )}
-                  
-                  {/* 3 cards: Orçamento, Pago, Restante — cada um em USD e BRL */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                    <div style={{ height: 8, borderRadius: 5, background: '#FDE68A', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', borderRadius: 5,
+                        width: `${Math.min(100, Math.max(0, bal.percentPaid))}%`,
+                        background: bal.isSettled ? '#059669' : (bal.percentPaid > 50 ? '#F59E0B' : '#DC2626'),
+                        transition: 'width .4s',
+                      }} />
+                    </div>
+                  </div>
+
+                  {/* 4 blocos: FOB (fábrica) · TOTAL DA COMPRA (final) · PAGO · FALTA */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
                     <div style={{ background: 'var(--surface)', padding: 10, borderRadius: 8, border: '1px solid #FDE68A' }}>
-                      <div className="text-muted text-xs">ORÇAMENTO</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>$ {budgetTotal.toFixed(2)}</div>
-                      {avgRate > 0 && (
-                        <div style={{ fontSize: 12, color: '#92400E', marginTop: 2 }}>
-                          R$ {budgetBrl.toFixed(2)}
+                      <div className="text-muted text-xs">FOB (FÁBRICA)</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>$ {bal.fobTotal.toFixed(2)}</div>
+                      {bal.multiplier && (
+                        <div style={{ fontSize: 11, color: '#92400E', marginTop: 2 }}>fator ×{bal.multiplier.toFixed(3)}</div>
+                      )}
+                    </div>
+                    <div style={{ background: '#F0FDF4', padding: 10, borderRadius: 8, border: '1px solid #86EFAC' }}>
+                      <div className="text-xs" style={{ color: '#166534', fontWeight: 700 }}>TOTAL DA COMPRA</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, marginTop: 2, color: '#166534' }}>$ {bal.total.toFixed(2)}</div>
+                      {bal.projRate > 0 && (
+                        <div style={{ fontSize: 11, color: '#166534', marginTop: 2 }}>
+                          ≈ R$ {(bal.total * bal.projRate).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
                         </div>
                       )}
                     </div>
                     <div style={{ background: 'var(--surface)', padding: 10, borderRadius: 8, border: '1px solid #FDE68A' }}>
                       <div className="text-muted text-xs">PAGO</div>
                       <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>$ {totalPaidUsd.toFixed(2)}</div>
-                      <div style={{ fontSize: 12, color: '#92400E', marginTop: 2 }}>
-                        R$ {totalPaidBrl.toFixed(2)}
+                      <div style={{ fontSize: 11, color: '#92400E', marginTop: 2 }}>
+                        R$ {totalPaidBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
                       </div>
                     </div>
                     <div style={{
-                      background: remainUsd <= 0 ? '#ECFDF5' : '#fff',
+                      background: bal.isSettled ? '#ECFDF5' : '#FEF2F2',
                       padding: 10, borderRadius: 8,
-                      border: `1px solid ${remainUsd <= 0 ? '#A7F3D0' : '#FDE68A'}`,
+                      border: `1px solid ${bal.isSettled ? '#A7F3D0' : '#FCA5A5'}`,
                     }}>
-                      <div className="text-muted text-xs">RESTANTE</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: remainUsd <= 0 ? '#059669' : '#EF4444', marginTop: 2 }}>
-                        $ {remainUsd.toFixed(2)}
+                      <div className="text-xs" style={{ color: bal.isSettled ? '#059669' : '#991B1B', fontWeight: 700 }}>
+                        {bal.isSettled ? 'QUITADO' : 'FALTA PAGAR'}
                       </div>
-                      {avgRate > 0 && (
-                        <div style={{ fontSize: 12, color: remainUsd <= 0 ? '#059669' : '#92400E', marginTop: 2 }}>
-                          R$ {remainBrl.toFixed(2)}
+                      <div style={{ fontSize: 17, fontWeight: 800, color: bal.isSettled ? '#059669' : '#DC2626', marginTop: 2 }}>
+                        $ {Math.max(0, remainUsd).toFixed(2)}
+                      </div>
+                      {!bal.isSettled && remainBrl > 0 && (
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#991B1B', marginTop: 2 }}>
+                          R$ {remainBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
                         </div>
                       )}
                     </div>
                   </div>
-                  
-                  {avgRate === 0 && (
-                    <div className="text-muted text-xs" style={{ textAlign: 'center', marginTop: 8 }}>
-                      💡 Adicione pagamentos com câmbio para ver valores em BRL
+
+                  {!bal.isFullyConfirmed && (
+                    <div style={{ marginTop: 8, padding: '7px 10px', background: '#FFFBEB', border: '1px dashed #FBBF24', borderRadius: 6, fontSize: 11, color: '#92400E' }}>
+                      ⚠️ Parte do total é <strong>estimativa</strong> (FOB × fator {(parseFloat(o.conversion_factor) || 1.65)}). Lance os valores em <strong>💵 Valores da trading</strong> pra ter o número exato.
                     </div>
                   )}
                 </div>

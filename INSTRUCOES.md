@@ -1,27 +1,41 @@
-# KIRA v13.66 — FIX: Sync da Shopify morria no fim ("Failed to fetch")
+# KIRA v13.67 — VALOR FINAL da trading (Fase 1 do financeiro de importação)
 
-## 🐛 O que aconteceu
+## 🔴 O erro que existia (e o porquê da planilha)
 
-O Sync **funcionou** — buscou os produtos e chegou a 4.535 pedidos (página 19+) — e morreu **na hora de salvar**. Causa: com a paginação corrigida (v13.53), o sync passou a trazer o volume real da loja, e cada pedido/variante vem da API com **dezenas de campos** que o sistema nunca usa. O payload de vários MB estourava a gravação no Supabase e o sync perdia TUDO no último passo.
+Todo o financeiro media a dívida contra o **FOB** — mas o que você paga é o **valor final da trading** (FOB + impostos + frete + tudo, multiplicador ~1,5–1,8). Nos seus dados reais o sistema subestimava em **~$33.000** só em dois pedidos. Com a planilha da VALENTINA/CASSANDRA como teste: o certo é faltar **$8.885,63**; o sistema antigo diria **$4.963,43**. Daí ele nunca ter servido pra decidir nada.
 
-## ✅ O conserto (3 camadas)
+## ✅ O que passou a existir
 
-1. **Slim antes de salvar**: o cache agora guarda só o que o sistema lê — produtos: `title + sku/estoque/preço` das variantes; pedidos: `data + sku/qtd/preço` dos itens. Payload de 4.500 pedidos: de dezenas de MB pra ~1 MB (testado).
-2. **Salvamento em duas etapas**: os **produtos são salvos assim que chegam** — se a fase de pedidos falhar por qualquer motivo, estoque/SKUs ficam garantidos e os pedidos antigos do cache são preservados (não zera nada).
-3. **Erro que explica**: no lugar do "TypeError: Failed to fetch" seco, a mensagem diz o que houve e que os produtos já salvos foram mantidos.
+**💵 Valores da trading** — botão novo no detalhe do pedido. Abre uma tela com **todas as linhas** (produto · cor · qtd · FOB) pra você digitar o **valor final por peça** que a importadora mandou:
 
-O slim fica **dentro** do gravador (`setShopifyCache`) — qualquer caminho futuro que salvar o cache já sai magro.
+- **Valor base por produto** que as cores herdam + **override por cor** quando a trading manda diferente (na sua planilha, VALENTINA 1B/2/COPPER = $25,76 e TT2-CARMEL = $27,90 — exatamente esse caso).
+- **Multiplicador ao vivo** em cada linha (×1,52, ×1,42…) e o **médio do pedido** (×1,501 no teste).
+- **Total da compra** em USD e em BRL, com o câmbio do pedido.
+- Contador **"linhas confirmadas 4/4"** — o que ainda não tem valor da trading segue como **estimativa** (FOB × fator) e é marcado como tal. Estimativa nunca se disfarça de número real.
+- Atalho opcional: aplicar um fator só nas linhas vazias.
 
-## ▶️ O que fazer agora
+**Painel financeiro do pedido reescrito** — 4 blocos: **FOB (fábrica)** com o fator · **TOTAL DA COMPRA** (o que você deve, USD e BRL) · **PAGO** · **FALTA PAGAR** (USD e BRL), mais barra de quitação, câmbio médio efetivo dos seus pagamentos e aviso quando parte é estimativa.
 
-Ctrl+Shift+R → aba Shopify → **Sync** de novo. Deve completar; você verá "produtos salvos ✓" no meio do caminho e o total no fim. Aí: **🛒 Puxar SKUs da Shopify** nos produtos (v13.65) passa a enxergar a loja inteira e atual.
+**Financeiro consolidado**: o card virou **"FALTA PAGAR (TUDO)"** com o valor em USD **e em BRL**, quantos pedidos e quantos ainda estão sem valor da trading. Projeções e análise passaram a usar o valor final automaticamente.
+
+**Pagamentos**: já funcionavam do jeito que você precisa (quantos quiser, data, banco, comprovante, e BRL↔USD pela cotação do dia) — agora eles abatem do **total certo**.
+
+## 🗄️ Banco
+
+`order_items.final_price_usd` (unitário) + `colors[].final_price_usd` (override por cor), espelhando a estrutura que o FOB já tinha. RPC atualizado. Migração `sql/25` aplicada em produção.
 
 ## ✅ Verificações
 
-- 6 testes novos pro slim (mantém exatamente os campos usados, corta >5× no produto gordo real, 4.500 pedidos < 1,5MB, nulos não quebram)
-- ESLint 0 erros, build OK, 235/236 testes (o 1 é o pré-existente de fuso)
+- 10 testes novos com os números reais da sua planilha (final por cor sobrescreve o do item; total = soma(final × qtd); multiplicador; pedido misto confirmado/estimado; **"pagar só o FOB não quita"**; consolidado com crítico primeiro)
+- Testado no navegador com VALENTINA + CASSANDRA: FOB $7.823,40 · total final $11.745,60 · ×1,501 · 460 peças · falta **$8.885,63 ≈ R$ 46.916** · câmbio médio efetivo 5,28 — tudo conferido na mão
+- 3 testes antigos que codificavam o comportamento errado foram reescritos (documentando a mudança de semântica)
+- ESLint 0 erros, build OK, 246/247 testes (o 1 é o pré-existente de fuso)
+
+## 🗓️ Próximas fases (já decididas com a dona)
+
+- **Fase 2**: caixinha/reserva **por pedido** (quanto já está guardado, em qual banco, rendendo) + % coberto
+- **Fase 3**: painel consolidado inteligente — quanto devo no total vs quanto tenho reservado, timeline de vencimentos, alertas
 
 ## 📋 Pendências do usuário (seguem valendo)
 
 - Revogar o **token antigo da Shopify** · Ativar **proteção de senha vazada** no Supabase
-- Fila estratégica: **sync automático noturno** (com o slim, ficou viável até pra edge function) · conferência de recebimento

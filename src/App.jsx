@@ -468,6 +468,7 @@ function AppCore() {
           {page === 'financial' && (
             <FinanceiroPage
               perm={perm}
+              rate={rate}
               onOrderClick={(o) => {
                 setPendingOpenOrderId(o.id)
                 setPage('orders')

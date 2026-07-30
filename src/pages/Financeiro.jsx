@@ -37,7 +37,7 @@ const PERIODS = [
   { id: 'all', label: 'Tudo', days: null },
 ]
 
-export function FinanceiroPage({ perm, onOrderClick }) {
+export function FinanceiroPage({ perm, rate, onOrderClick }) {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   // Tab vem da URL via search param (?tab=...) pra preservar ao recarregar
@@ -136,10 +136,10 @@ export function FinanceiroPage({ perm, onOrderClick }) {
         </div>
       )}
       
-      {tab === 'visao-geral' && <TabVisaoGeral orders={orders} payments={periodPayments} period={periodCfg} setTab={setTab} onOrderClick={onOrderClick} />}
+      {tab === 'visao-geral' && <TabVisaoGeral orders={orders} payments={periodPayments} period={periodCfg} setTab={setTab} onOrderClick={onOrderClick} rate={rate} />}
       {tab === 'pagamentos' && <TabPagamentos allPayments={allPayments} orders={orders} onOrderClick={onOrderClick} />}
       {tab === 'cambio' && <TabCambio allPayments={allPayments} payments={periodPayments} period={periodCfg} />}
-      {tab === 'analise' && <TabAnalise orders={orders} payments={periodPayments} onOrderClick={onOrderClick} />}
+      {tab === 'analise' && <TabAnalise orders={orders} payments={periodPayments} onOrderClick={onOrderClick} rate={rate} />}
       {tab === 'projecoes' && <TabProjecoes orders={orders} onOrderClick={onOrderClick} />}
     </div>
   )
@@ -148,13 +148,16 @@ export function FinanceiroPage({ perm, onOrderClick }) {
 // ═══════════════════════════════════════════════════════════════════
 // ABA VISÃO GERAL — métricas top + atalhos
 // ═══════════════════════════════════════════════════════════════════
-function TabVisaoGeral({ orders, payments, period, setTab, onOrderClick }) {
+function TabVisaoGeral({ orders, payments, period, setTab, onOrderClick, rate }) {
   const totals = computeTotals(payments)
   const avgRate = computeAvgRate(payments)
-  const unpaid = computeUnpaidOrders(orders)
+  const unpaid = computeUnpaidOrders(orders, rate)
   const missing = computeMissingReceipts(orders)
   const totalUnpaidUsd = sumRemaining(unpaid)
   const criticalCount = unpaid.filter(u => u.isCritical).length
+  // v13.67 — quanto falta em reais e quantos pedidos ainda são estimativa
+  const totalUnpaidBrl = unpaid.reduce((a, u) => a + (u.remainingBrl || 0), 0)
+  const estimatedCount = unpaid.filter(u => u.isFullyConfirmed === false).length
   
   if (payments.length === 0 && period.days !== null) {
     return (
@@ -174,10 +177,11 @@ function TabVisaoGeral({ orders, payments, period, setTab, onOrderClick }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 18 }}>
         <Metric label="GASTO USD" value={`$ ${totals.usd.toFixed(2)}`} sub={`${payments.length} pagamento(s)`} color="#059669" />
         <Metric label="GASTO BRL" value={`R$ ${totals.brl.toFixed(2)}`} sub={avgRate > 0 ? `câmbio médio R$ ${avgRate.toFixed(4)}` : 'sem câmbio registrado'} color="#7c3aed" />
+        {/* v13.67 — saldo medido contra o VALOR FINAL da trading, com o BRL ao lado */}
         <Metric
-          label="SALDO ABERTO"
+          label="FALTA PAGAR (TUDO)"
           value={`$ ${totalUnpaidUsd.toFixed(2)}`}
-          sub={`${unpaid.length} pedido(s)${criticalCount > 0 ? ` · ${criticalCount} crítico(s)` : ''}`}
+          sub={`${totalUnpaidBrl > 0 ? `≈ R$ ${totalUnpaidBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} · ` : ''}${unpaid.length} pedido(s)${criticalCount > 0 ? ` · ${criticalCount} crítico(s)` : ''}${estimatedCount > 0 ? ` · ⚠ ${estimatedCount} sem valor da trading` : ''}`}
           color={criticalCount > 0 ? '#DC2626' : '#0891B2'}
         />
         <Metric
@@ -548,9 +552,9 @@ function RateChart({ data }) {
 // ═══════════════════════════════════════════════════════════════════
 // ABA ANÁLISE — top fábricas, atrasados, comprovantes
 // ═══════════════════════════════════════════════════════════════════
-function TabAnalise({ orders, payments, onOrderClick }) {
+function TabAnalise({ orders, payments, onOrderClick, rate }) {
   const top = topFactoriesByGasto(payments, 5)
-  const unpaid = computeUnpaidOrders(orders)
+  const unpaid = computeUnpaidOrders(orders, rate)
   const missing = computeMissingReceipts(orders)
   
   return (
@@ -754,7 +758,14 @@ function UnpaidOrderRow({ order, onClick }) {
       </div>
       <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: textColor }}>$ {order.remaining.toFixed(2)}</div>
-        <div className="text-muted" style={{ fontSize: 10 }}>de $ {order.fobTotal.toFixed(2)}</div>
+        {/* v13.67 — o total é o VALOR FINAL da trading (não o FOB); ⚠ = parte estimada */}
+        <div className="text-muted" style={{ fontSize: 10 }}>
+          de $ {(order.finalTotal ?? order.fobTotal).toFixed(2)}
+          {order.isFullyConfirmed === false && <span title="Parte do total é estimativa (FOB × fator) — lance os valores da trading no pedido"> ⚠</span>}
+        </div>
+        {order.remainingBrl > 0 && (
+          <div className="text-muted" style={{ fontSize: 10 }}>≈ R$ {order.remainingBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</div>
+        )}
       </div>
     </div>
   )

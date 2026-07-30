@@ -275,10 +275,13 @@ async function replaceOrderItems(orderId, items) {
     // Sanitiza cores: qty é número, price_usd é opcional (null = herda do item)
     const colors = (it.colors || []).map(c => {
       const cprice = sanitizeNum(c.price_usd)
+      // v13.67 — valor FINAL da trading por cor (override do valor do item)
+      const cfinal = sanitizeNum(c.final_price_usd)
       return {
         code: sanitizeTxt(c.code) || '',
         qty: sanitizeNum(c.qty) || 0,
         price_usd: cprice != null ? String(cprice) : null,
+        final_price_usd: cfinal != null ? String(cfinal) : null,
       }
     }).filter(c => c.code)  // remove cores sem código
     return {
@@ -293,6 +296,8 @@ async function replaceOrderItems(orderId, items) {
       quantity: String(qty),
       price_usd: price != null ? String(price) : null,
       price_usd_snapshot: priceSnapshot != null ? String(priceSnapshot) : null,
+      // v13.67 — valor FINAL da trading (unitário do item; cores podem sobrescrever)
+      final_price_usd: (() => { const v = sanitizeNum(it.final_price_usd); return v != null ? String(v) : null })(),
       requirements: sanitizeTxt(it.requirements),  // v13.58 — texto pra fábrica na planilha
       colors,
     }

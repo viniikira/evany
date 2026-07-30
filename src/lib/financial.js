@@ -116,26 +116,194 @@ export function computeOrderPaid(order) {
   return (order.payments || []).reduce((a, p) => a + (parseFloat(p.amount_usd) || 0), 0)
 }
 
-// Pedidos com pagamento incompleto (sent + manufacturing + completed)
-// Concluídos com saldo aberto = CRÍTICO (recebi mas não paguei tudo)
-export function computeUnpaidOrders(orders) {
+// ═══════════════════════════════════════════════════════════════════
+// v13.67 — VALOR FINAL DA TRADING (o que é realmente pago)
+//
+// A importação passa por uma trading que devolve o valor FINAL por linha
+// (FOB + impostos + frete + tudo), com multiplicador ~1,5–1,8 que varia por
+// produto e por cor. Até a v13.66 todo o financeiro media a dívida contra o
+// FOB — subestimando em ~60%. Agora:
+//   • linha COM final informado  → valor confirmado pela trading
+//   • linha SEM final            → estimativa (FOB × fator do pedido)
+// A estimativa nunca se disfarça de confirmada: quem consome recebe as duas
+// partes e sabe quanto do total já é real.
+// ═══════════════════════════════════════════════════════════════════
+
+const num = (v) => {
+  if (v == null || v === '') return null
+  const n = parseFloat(v)
+  return isNaN(n) ? null : n
+}
+
+export const DEFAULT_TRADING_FACTOR = 1.65
+
+/**
+ * Percorre as linhas (produto × cor) de um pedido resolvendo FOB e FINAL.
+ * @returns {Array<{itemId, colorCode, qty, fobUnit, finalUnit, isConfirmed, fobTotal, finalTotal, multiplier}>}
+ */
+export function computeOrderLines(order) {
+  const factor = num(order?.conversion_factor) || DEFAULT_TRADING_FACTOR
+  const lines = []
+  for (const it of (order?.items || [])) {
+    const fobItem = num(it.price_usd_snapshot) ?? num(it.price_usd) ?? 0
+    const finalItem = num(it.final_price_usd)
+    const cls = it.colors || []
+    const push = (colorCode, qty, cFob, cFinal) => {
+      const fobUnit = cFob ?? fobItem ?? 0
+      const confirmed = cFinal ?? finalItem
+      const isConfirmed = confirmed != null && confirmed > 0
+      const finalUnit = isConfirmed ? confirmed : (fobUnit > 0 ? fobUnit * factor : 0)
+      lines.push({
+        itemId: it.id,
+        colorCode: colorCode || null,
+        qty,
+        fobUnit,
+        finalUnit,
+        isConfirmed,
+        fobTotal: fobUnit * qty,
+        finalTotal: finalUnit * qty,
+        multiplier: fobUnit > 0 ? finalUnit / fobUnit : null,
+      })
+    }
+    if (cls.length > 0) {
+      for (const c of cls) {
+        push(c.code, Number(c.qty || 0), num(c.price_usd), num(c.final_price_usd))
+      }
+    } else {
+      push(null, Number(it.quantity || 0), null, null)
+    }
+  }
+  return lines
+}
+
+/**
+ * Total FINAL de um pedido — o que a Kira realmente vai pagar.
+ * @returns {{total, confirmed, estimated, isFullyConfirmed, hasAnyConfirmed,
+ *            linesTotal, linesConfirmed, fobTotal, multiplier}}
+ */
+export function computeOrderFinal(order) {
+  const lines = computeOrderLines(order)
+  let total = 0, confirmed = 0, estimated = 0, linesConfirmed = 0, fobTotal = 0
+  for (const l of lines) {
+    total += l.finalTotal
+    fobTotal += l.fobTotal
+    if (l.isConfirmed) { confirmed += l.finalTotal; linesConfirmed++ }
+    else estimated += l.finalTotal
+  }
+  const withQty = lines.filter(l => l.qty > 0)
+  return {
+    total,
+    confirmed,
+    estimated,
+    isFullyConfirmed: withQty.length > 0 && withQty.every(l => l.isConfirmed),
+    hasAnyConfirmed: linesConfirmed > 0,
+    linesTotal: withQty.length,
+    linesConfirmed: withQty.filter(l => l.isConfirmed).length,
+    fobTotal,
+    // Multiplicador efetivo do pedido (final ÷ FOB)
+    multiplier: fobTotal > 0 ? total / fobTotal : null,
+  }
+}
+
+/**
+ * Situação financeira completa de um pedido: quanto custa, quanto foi pago,
+ * quanto falta — em USD e em BRL (pela cotação informada).
+ * @param {object} order
+ * @param {number} rate cotação atual pra estimar o que falta em BRL
+ */
+export function computeOrderBalance(order, rate) {
+  const fin = computeOrderFinal(order)
+  const paidUsd = computeOrderPaid(order)
+  const paidBrl = (order?.payments || []).reduce((a, p) => a + (num(p.amount_brl) || 0), 0)
+  const remainingUsd = fin.total - paidUsd
+  // Câmbio pra projetar o que falta: média efetiva já paga > câmbio orçado > cotação atual
+  const avgRate = paidUsd > 0 && paidBrl > 0 ? paidBrl / paidUsd : null
+  const projRate = num(order?.budget_rate) || avgRate || num(rate) || 0
+  return {
+    ...fin,
+    paidUsd,
+    paidBrl,
+    avgRate,
+    projRate,
+    remainingUsd,
+    remainingBrl: projRate > 0 ? remainingUsd * projRate : null,
+    percentPaid: fin.total > 0 ? (paidUsd / fin.total) * 100 : 0,
+    isSettled: fin.total > 0 && remainingUsd <= 0.01,
+    // Reserva já guardada pra este pedido (v13.68 usa; aqui só repassa)
+    reservedBrl: num(order?.reserved_brl) || 0,
+  }
+}
+
+/**
+ * Panorama consolidado: quanto devo em TODOS os pedidos abertos.
+ * @returns {{orders, totalFinal, totalPaid, totalRemainingUsd, totalRemainingBrl,
+ *            confirmedRemaining, estimatedRemaining, criticalCount}}
+ */
+export function computePendingSummary(orders = [], rate) {
+  const rows = []
+  let totalFinal = 0, totalPaid = 0, totalRemainingUsd = 0, totalRemainingBrl = 0
+  let confirmedRemaining = 0, estimatedRemaining = 0, criticalCount = 0
+  for (const o of orders) {
+    if (o.deleted_at || o.purged_at) continue
+    if (!['sent', 'manufacturing', 'in_transit', 'completed'].includes(o.status)) continue
+    const b = computeOrderBalance(o, rate)
+    if (b.total <= 0) continue
+    totalFinal += b.total
+    totalPaid += b.paidUsd
+    if (b.remainingUsd > 0.01) {
+      totalRemainingUsd += b.remainingUsd
+      totalRemainingBrl += b.remainingBrl || 0
+      if (b.isFullyConfirmed) confirmedRemaining += b.remainingUsd
+      else estimatedRemaining += b.remainingUsd
+      if (o.status === 'completed') criticalCount++
+      rows.push({
+        id: o.id,
+        order_name: o.order_name || o.factory,
+        factory: o.factory,
+        status: o.status,
+        expected_arrival: o.expected_arrival || null,
+        isCritical: o.status === 'completed',
+        ...b,
+      })
+    }
+  }
+  rows.sort((a, b) => (b.isCritical - a.isCritical) || (b.remainingUsd - a.remainingUsd))
+  return {
+    orders: rows,
+    totalFinal, totalPaid,
+    totalRemainingUsd, totalRemainingBrl,
+    confirmedRemaining, estimatedRemaining,
+    criticalCount,
+  }
+}
+
+// Pedidos com pagamento incompleto (sent + manufacturing + in_transit + completed)
+// Concluídos com saldo aberto = CRÍTICO (recebi a mercadoria mas ainda devo)
+//
+// v13.67 — mede contra o VALOR FINAL da trading (antes era contra o FOB, que
+// subestimava a dívida em ~60%). `fobTotal` continua no retorno pra quem
+// mostra o custo de fábrica; `total` é o que de fato se deve.
+export function computeUnpaidOrders(orders, rate) {
   const out = []
   for (const o of orders) {
     if (o.status !== 'manufacturing' && o.status !== 'sent' && o.status !== 'in_transit' && o.status !== 'completed') continue
-    const fobTotal = computeOrderFOB(o)
-    if (fobTotal <= 0) continue
-    const paidUsd = computeOrderPaid(o)
-    const remaining = fobTotal - paidUsd
-    if (remaining > 0.01) {
+    const b = computeOrderBalance(o, rate)
+    if (b.total <= 0) continue
+    if (b.remainingUsd > 0.01) {
       out.push({
         id: o.id,
         order_name: o.order_name || o.factory,
         factory: o.factory,
         status: o.status,
-        fobTotal,
-        paidUsd,
-        remaining,
-        percentPaid: (paidUsd / fobTotal) * 100,
+        // Compatibilidade: consumidores antigos leem fobTotal/remaining
+        fobTotal: b.fobTotal,
+        finalTotal: b.total,
+        isFullyConfirmed: b.isFullyConfirmed,
+        multiplier: b.multiplier,
+        paidUsd: b.paidUsd,
+        remaining: b.remainingUsd,
+        remainingBrl: b.remainingBrl,
+        percentPaid: b.percentPaid,
         created_at: o.created_at,
         expected_arrival: o.expected_arrival || null,
         isCritical: o.status === 'completed',
