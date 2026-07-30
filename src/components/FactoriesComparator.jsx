@@ -6,6 +6,7 @@
 import { useState, useMemo } from 'react'
 import { Modal, MH, MB } from './ui'
 import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
+import { parseDateLocal } from '../lib/utils'
 
 const PERIODS = [
   { id: '3m', label: '3 meses', days: 90 },
@@ -191,8 +192,8 @@ function computeComparison(factories, orders, period) {
   const inPeriod = (date) => {
     if (!cutoff) return true
     if (!date) return false
-    const d = new Date(date)
-    return !isNaN(d.getTime()) && d >= cutoff
+    const d = parseDateLocal(date)
+    return !!d && d >= cutoff
   }
   
   // Filtra pedidos do período (e ignora cancelados)
@@ -244,12 +245,12 @@ function computeComparison(factories, orders, period) {
       // Pra concluídos: comparar quanto demorou vs prazo prometido
       // v13.41 — prefere order_date (retroativa) → fallback manufacturing_started_at
       if (o.status === 'completed' && (o.order_date || o.manufacturing_started_at) && o.promised_lead_days) {
-        const start = new Date(o.order_date || o.manufacturing_started_at)
+        const start = parseDateLocal(o.order_date || o.manufacturing_started_at)
         // Última entrada no histórico com status completed = data de conclusão
         const history = Array.isArray(o.status_history) ? o.status_history : []
         const compEntry = history.filter(h => h.status === 'completed').sort((a, b) => new Date(b.at) - new Date(a.at))[0]
         const completedAt = compEntry ? new Date(compEntry.at) : new Date(o.updated_at || o.created_at)
-        const days = Math.floor((completedAt - start) / 86400000)
+        const days = start ? Math.floor((completedAt - start) / 86400000) : -1
         if (days > o.promised_lead_days) lateCount++
       }
     }

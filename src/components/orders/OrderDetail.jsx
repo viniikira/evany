@@ -19,7 +19,7 @@ import { generateFactorySheet } from '../../lib/factorySheet'
 import { trackAction } from '../../lib/analytics'
 import { addLog as writeLog } from '../../lib/data/misc'
 import { ORDER_ST } from '../../lib/constants'
-import { UC, formatDate } from '../../lib/utils'
+import { UC, formatDate, parseDateLocal } from '../../lib/utils'
 import { toastError } from '../../lib/errors'
 import { log } from '../../lib/logger'
 
@@ -311,8 +311,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
             {/* #3 Prazo prometido + indicador de atraso (apenas em fabricação)
                 v13.41 — prefere order_date (retroativa) → fallback manufacturing_started_at */}
             {o.status === 'manufacturing' && o.promised_lead_days && (o.order_date || o.manufacturing_started_at) && (() => {
-              const start = new Date(o.order_date || o.manufacturing_started_at)
-              if (isNaN(start.getTime())) return null
+              const start = parseDateLocal(o.order_date || o.manufacturing_started_at)
+              if (!start) return null
               const daysElapsed = Math.floor((new Date() - start) / 86400000)
               if (daysElapsed < 0) return null
               const isLate = daysElapsed > o.promised_lead_days

@@ -5,7 +5,7 @@
 // Por que não jsPDF/pdfmake? Adiciona ~200KB de dependência. Print do navegador
 // é gratuito, suporta CSS, e o resultado é aceitável pra uso interno.
 
-import { UC } from './utils'
+import { UC, formatDate } from './utils'
 
 const KIRA_LOGO = 'https://cdn.shopify.com/s/files/1/0633/6865/9009/files/Branco_1.webp?v=1745818832'
 
@@ -156,12 +156,12 @@ export function generateOrderPDF(order, products) {
     </div>
     <div class="info-item">
       <div class="info-label">Data Pedido</div>
-      <div class="info-value">${new Date(order.created_at).toLocaleDateString('pt-BR')}</div>
+      <div class="info-value">${formatDate(order.order_date || order.created_at, 'full')}</div>
     </div>
     ${order.expected_arrival ? `
       <div class="info-item">
         <div class="info-label">Chegada Prevista</div>
-        <div class="info-value">${new Date(order.expected_arrival).toLocaleDateString('pt-BR')}</div>
+        <div class="info-value">${formatDate(order.expected_arrival, 'full')}</div>
       </div>
     ` : ''}
     ${order.dispatch_code ? `

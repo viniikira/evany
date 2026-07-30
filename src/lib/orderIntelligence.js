@@ -7,6 +7,7 @@
 // preço. Nada disso persiste — é só leitura do histórico.
 
 import { buildProductPriceHistory, computePriceStats, computePriceTrend } from './priceHistory'
+import { parseDateLocal } from './utils'
 
 const norm = (s) => (s || '').toString().trim().toLowerCase()
 
@@ -30,7 +31,7 @@ export function suggestQuantity(productId, colorCode, orders = []) {
   let lastTime = -Infinity
   for (const o of orders) {
     if (!isCounted(o) || !HISTORICAL.has(o.status)) continue
-    const t = new Date(o.order_date || o.created_at).getTime()
+    const t = parseDateLocal(o.order_date || o.created_at)?.getTime() ?? -Infinity
     for (const it of (o.items || [])) {
       if (it.product_id !== productId) continue
       for (const c of (it.colors || [])) {
@@ -59,7 +60,7 @@ export function suggestColorsForModel(productId, orders = []) {
   const map = new Map()
   for (const o of orders) {
     if (!isCounted(o) || !HISTORICAL.has(o.status)) continue
-    const t = new Date(o.order_date || o.created_at).getTime()
+    const t = parseDateLocal(o.order_date || o.created_at)?.getTime() ?? -Infinity
     for (const it of (o.items || [])) {
       if (it.product_id !== productId) continue
       for (const c of (it.colors || [])) {
