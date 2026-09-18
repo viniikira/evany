@@ -42,7 +42,7 @@ const dateOf = (o) => parseDateLocal(o?.order_date || o?.created_at)?.getTime() 
 // de ordenação dentro do grupo (menor = mais em cima).
 export function classifyOrder(order, { rate, leadTimeByFactory = new Map(), now = Date.now() } = {}) {
   const status = order?.status
-  const delay = computeOrderDelay(order, leadTimeByFactory)
+  const delay = computeOrderDelay(order, leadTimeByFactory, now)
   const bal = computeOrderBalance(order, rate)
   const openDebt = !bal.isSettled && bal.remainingUsd > 0.01
 

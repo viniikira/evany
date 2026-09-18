@@ -237,7 +237,9 @@ export function computeFactoryLeadTime(orders = []) {
  * @param {Map} leadTimeByFactory - resultado de computeFactoryLeadTime (fallback)
  * @returns {object|null} { daysElapsed, deadlineDays, isLate, daysLate, source }
  */
-export function computeOrderDelay(order, leadTimeByFactory = new Map()) {
+// `now` é opcional: quem precisa de resultado reprodutível (testes, ordenação
+// com um "agora" fixo) passa o seu; o padrão continua sendo o relógio real.
+export function computeOrderDelay(order, leadTimeByFactory = new Map(), now = Date.now()) {
   if (!order || order.status !== 'manufacturing') return null
   
   // v13.41 — Prefere order_date (data real); fallback pra manufacturing_started_at
@@ -249,7 +251,6 @@ export function computeOrderDelay(order, leadTimeByFactory = new Map()) {
     return { daysElapsed: 0, deadlineDays: null, isLate: false, daysLate: 0, source: 'legacy_no_start_date' }
   }
   
-  const now = new Date()
   const start = parseDateLocal(startSource)
   if (!start) return null  // data corrompida
   

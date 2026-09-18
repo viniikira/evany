@@ -19,7 +19,8 @@ import { Lightbox, ClearFiltersButton, Modal, MH, MB } from '../components/ui'
 import { listFactories, listCollections } from '../lib/data/misc'
 import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
 import { priceSignalForModel, suggestColorsForModel } from '../lib/orderIntelligence'
-import { formatDate, UC } from '../lib/utils'
+import { formatDate, UC, parseDateLocal } from '../lib/utils'
+import { buildProductionView } from '../lib/production'
 
 export default function ProducaoPage({
   products = [],
@@ -49,68 +50,14 @@ export default function ProducaoPage({
     if (!collectionsProp) listCollections().then(setCollections).catch(() => setCollections([]))
   }, [factoriesProp, collectionsProp])
 
-  // ═════════ INDEX: (produto, cor) → PEÇAS + pedidos ativos ═════════
-  // v13.61 — antes contava "quantos itens de pedido", agora soma QUANTIDADES
-  // e guarda os pedidos (com chegada/atraso) pra vincular na tela.
-  const colorOrderIndex = useMemo(() => {
-    const lead = computeFactoryLeadTime(orders)
-    const idx = new Map()
-    for (const o of orders) {
-      if (o.status !== 'sent' && o.status !== 'manufacturing') continue
-      if (o.deleted_at || o.purged_at) continue
-      const delay = computeOrderDelay(o, lead)
-      const orderInfo = {
-        id: o.id,
-        name: o.order_name || o.factory,
-        status: o.status,
-        expectedArrival: o.expected_arrival || null,
-        isLate: !!delay?.isLate,
-        daysLate: delay?.daysLate || 0,
-      }
-      for (const it of (o.items || [])) {
-        if (!it.product_id) continue
-        for (const c of (it.colors || [])) {
-          if (!c.code) continue
-          const key = `${it.product_id}|${c.code.trim().toLowerCase()}`
-          const cur = idx.get(key) || { qty: 0, orders: new Map() }
-          cur.qty += Number(c.qty) || 0
-          if (!cur.orders.has(o.id)) cur.orders.set(o.id, orderInfo)
-          idx.set(key, cur)
-        }
-      }
-    }
-    return idx
-  }, [orders])
-
-  // ═════════ PRODUCTION: agrupa por produto (com peças e pedidos) ═════════
-  const productionGroups = useMemo(() => {
-    const groups = new Map()
-    for (const p of products) {
-      for (const cv of (p.color_variants || [])) {
-        if (cv.status !== 'production') continue
-        if (!groups.has(p.id)) groups.set(p.id, { product: p, cores: [] })
-        const info = colorOrderIndex.get(`${p.id}|${(cv.code || '').trim().toLowerCase()}`)
-        groups.get(p.id).cores.push({
-          code: cv.code,
-          sku: cv.sku,
-          colorData: colors.find(c => c.code === cv.code),
-          qty: info?.qty || 0,
-          hasOrder: !!info,
-          orders: info ? [...info.orders.values()] : [],
-        })
-      }
-    }
-    // Totais e pedidos distintos por produto
-    return [...groups.values()].map(g => {
-      const orderMap = new Map()
-      for (const c of g.cores) for (const o of c.orders) if (!orderMap.has(o.id)) orderMap.set(o.id, o)
-      return {
-        ...g,
-        totalQty: g.cores.reduce((s, c) => s + c.qty, 0),
-        orders: [...orderMap.values()],
-      }
-    })
-  }, [products, colors, colorOrderIndex])
+  // ═════════ PRODUÇÃO: derivada dos PEDIDOS (v13.73) ═════════
+  // Antes vinha da etiqueta "em produção" do cadastro — escondia 1.385 peças e
+  // dava alarme falso pro que já estava no navio. Ver src/lib/production.js.
+  const view = useMemo(
+    () => buildProductionView({ products, orders, colors }),
+    [products, orders, colors]
+  )
+  const productionGroups = view.groups
 
   // ═════════ TRANSIT ═════════
   const transitByOrder = useMemo(() => {
@@ -162,11 +109,11 @@ export default function ProducaoPage({
       }))
       .filter(g => g.cores.length > 0)
       .filter(g => {
-        if (factoryFilter && g.product.factory !== factoryFilter) return false
+        if (factoryFilter && g.factoryName !== factoryFilter) return false
         if (collectionFilter && g.product.collection !== collectionFilter) return false
         return true
       })
-      .map(g => ({ ...g, totalQty: g.cores.reduce((s, c) => s + c.qty, 0) }))
+      .map(g => ({ ...g, totalQty: g.cores.reduce((s, c) => s + c.qty, 0), reviewQty: g.cores.reduce((s, c) => s + (c.qtyReview || 0), 0) }))
 
     const sortFn = {
       pieces: (a, b) => b.totalQty - a.totalQty || (a.product.name || '').localeCompare(b.product.name || ''),
@@ -184,7 +131,7 @@ export default function ProducaoPage({
 
     const byFactory = new Map()
     for (const g of filtered) {
-      const f = g.product.factory || '— sem fábrica —'
+      const f = g.factoryName
       if (!byFactory.has(f)) byFactory.set(f, [])
       byFactory.get(f).push(g)
     }
@@ -193,8 +140,11 @@ export default function ProducaoPage({
       groups,
       totalCores: groups.reduce((s, g) => s + g.cores.length, 0),
       totalQty: groups.reduce((s, g) => s + g.totalQty, 0),
+      reviewQty: groups.reduce((s, g) => s + (g.reviewQty || 0), 0),
       stuckCores: groups.reduce((s, g) => s + g.cores.filter(c => !c.hasOrder).length, 0),
     }))
+      // v13.73 — fábrica com mais peças primeiro (antes: ordem de chegada dos dados)
+      .sort((a, b) => b.totalQty - a.totalQty || a.factoryName.localeCompare(b.factoryName))
   }, [productionGroups, search, factoryFilter, collectionFilter, showOnlyStuck, sortBy])
 
   const filteredTransitByOrder = useMemo(() => {
@@ -218,15 +168,9 @@ export default function ProducaoPage({
   }, [transitByOrder, search, factoryFilter])
 
   // ═════════ KPIs ═════════
-  const totalPiecesProduction = productionGroups.reduce((s, g) => s + g.totalQty, 0)
-  const totalCoresProduction = productionGroups.reduce((s, g) => s + g.cores.length, 0)
-  const totalStuck = productionGroups.reduce((s, g) => s + g.cores.filter(c => !c.hasOrder).length, 0)
+  const totalPiecesProduction = view.kpis.totalQty
   const transitPieces = transitByOrder.reduce((s, t) =>
     s + t.products.reduce((s2, p) => s2 + p.cores.reduce((s3, c) => s3 + (c.qty || 0), 0), 0), 0)
-  const nextArrival = transitByOrder
-    .map(t => t.expectedArrival)
-    .filter(Boolean)
-    .sort((a, b) => new Date(a) - new Date(b))[0] || null
 
   const hasFilters = !!(search || factoryFilter || collectionFilter || showOnlyStuck)
   const clearFilters = () => {
@@ -244,25 +188,46 @@ export default function ProducaoPage({
           <h1 className="prd-title-compact">Produç<em>ão</em></h1>
         </div>
         <div className="prd-kpis">
-          <div className="prd-kpi">
+          <div className="prd-kpi" title="Somado das linhas dos pedidos em revisão e em fabricação">
             <div className="prd-kpi-val">{totalPiecesProduction.toLocaleString('pt-BR')}</div>
-            <div className="prd-kpi-lbl">peças em produção</div>
+            <div className="prd-kpi-lbl">
+              peças em produção
+              {view.kpis.reviewQty > 0 && <> · {view.kpis.reviewQty.toLocaleString('pt-BR')} em revisão</>}
+            </div>
           </div>
           <div className="prd-kpi">
-            <div className="prd-kpi-val">{productionGroups.length}</div>
+            <div className="prd-kpi-val">{view.kpis.products}</div>
             <div className="prd-kpi-lbl">produtos</div>
           </div>
           <div className="prd-kpi">
-            <div className="prd-kpi-val">{totalCoresProduction}{totalStuck > 0 && <span className="prd-kpi-warn" title="Cores em produção sem nenhum pedido ativo"> · {totalStuck}⚠</span>}</div>
-            <div className="prd-kpi-lbl">cores{totalStuck > 0 ? ' · sem pedido' : ''}</div>
+            <div className="prd-kpi-val">
+              {view.kpis.colors}
+              {view.kpis.orphanCount > 0 && (
+                <span className="prd-kpi-warn" title="Cores com a etiqueta 'em produção' no cadastro que não estão em nenhum pedido — nem fabricando, nem a caminho"> · {view.kpis.orphanCount}⚠</span>
+              )}
+            </div>
+            <div className="prd-kpi-lbl">cores{view.kpis.orphanCount > 0 ? ' · etiqueta sem pedido' : ''}</div>
           </div>
           <div className="prd-kpi">
             <div className="prd-kpi-val">{transitPieces.toLocaleString('pt-BR')}</div>
             <div className="prd-kpi-lbl">peças em trânsito</div>
           </div>
-          {nextArrival && (
-            <div className="prd-kpi">
-              <div className="prd-kpi-val">{formatDate(nextArrival, 'full')}</div>
+          {view.overdueArrivals.length > 0 ? (
+            <button
+              type="button"
+              className="prd-kpi prd-kpi-alert"
+              onClick={() => onOpenOrder && onOpenOrder(view.overdueArrivals[0].id)}
+              title={view.overdueArrivals.map(a => `${a.name}: previsto ${formatDate(a.expectedArrival, 'full')} (${a.daysOverdue} dias atrás)`).join(' · ') + ' — já chegou? Abra o pedido e marque como concluído, ou atualize a previsão.'}
+            >
+              <div className="prd-kpi-val">⚠ {view.overdueArrivals[0].daysOverdue}d</div>
+              <div className="prd-kpi-lbl">
+                chegada vencida · {view.overdueArrivals[0].name}
+                {view.overdueArrivals.length > 1 && ` +${view.overdueArrivals.length - 1}`}
+              </div>
+            </button>
+          ) : view.nextArrival && (
+            <div className="prd-kpi" title={view.nextArrival.name}>
+              <div className="prd-kpi-val">{formatDate(view.nextArrival.expectedArrival, 'full')}</div>
               <div className="prd-kpi-lbl">próxima chegada</div>
             </div>
           )}
@@ -359,7 +324,8 @@ export default function ProducaoPage({
 
       {/* v13.64 — Panorama inteligente do produto */}
       {panoramaId && (() => {
-        const g = productionGroups.find(x => x.product.id === panoramaId)
+        // Panorama é do MODELO inteiro (junta as fábricas onde ele está sendo feito)
+        const g = view.byProduct.get(panoramaId)
         if (!g) return null
         return (
           <ProductPanorama
@@ -396,7 +362,7 @@ function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder, o
   }
   return (
     <>
-      {byFactory.map(({ factoryName, groups, totalCores, totalQty, stuckCores }, idx) => (
+      {byFactory.map(({ factoryName, groups, totalCores, totalQty, reviewQty, stuckCores }, idx) => (
         <div className="prd-factory-group" key={factoryName} style={{ animationDelay: `${idx * 0.08}s` }}>
           <div className="prd-factory-sep">
             <div className="prd-factory-name">
@@ -405,13 +371,14 @@ function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder, o
             <div className="prd-factory-meta">
               <span className="prd-factory-qty">{totalQty.toLocaleString('pt-BR')} peças</span>
               {' '}· {groups.length} produto{groups.length !== 1 ? 's' : ''} · {totalCores} cor{totalCores !== 1 ? 'es' : ''}
-              {stuckCores > 0 && <span className="stuck-inline"> · {stuckCores} sem pedido</span>}
+              {reviewQty > 0 && <> · {reviewQty.toLocaleString('pt-BR')} em revisão</>}
+              {stuckCores > 0 && <span className="stuck-inline"> · {stuckCores} etiqueta{stuckCores !== 1 ? 's' : ''} sem pedido</span>}
             </div>
           </div>
           <div className="prd-card-grid">
             {groups.map((g, i) => (
               <ProductCard
-                key={g.product.id}
+                key={g.key}
                 group={g}
                 staggerDelay={i * 0.04}
                 onPhotoClick={onPhotoClick}
@@ -479,7 +446,16 @@ function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder, onOpenPan
             {totalQty > 0 ? <>{totalQty.toLocaleString('pt-BR')}<small> pç</small></> : '0 pç'}
           </div>
         </div>
-        {product.collection && <div className="prd-prod-meta"><span className="prd-collection">{product.collection}</span></div>}
+        {(product.collection || (group.registeredFactory && group.registeredFactory !== group.factoryName)) && (
+          <div className="prd-prod-meta">
+            {product.collection && <span className="prd-collection">{product.collection}</span>}
+            {group.registeredFactory && group.registeredFactory !== group.factoryName && (
+              <span className="prd-collection" title="No cadastro este modelo é de outra fábrica — estas peças estão sendo feitas aqui">
+                modelo da {group.registeredFactory}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* v13.64 — Cores como SWATCHES grandes (os pontinhos de 20px eram ilegíveis) */}
         <div className="prd-sw-grid">
@@ -490,13 +466,13 @@ function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder, onOpenPan
               onClick={(e) => { e.stopPropagation(); if (c.colorData?.photo_url) onPhotoClick(c.colorData.photo_url) }}
               title={c.hasOrder
                 ? `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — ${c.qty} peça${c.qty !== 1 ? 's' : ''} em pedido ativo`
-                : `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — em produção SEM pedido ativo`}
+                : `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — marcada "em produção" no cadastro, mas não está em nenhum pedido (nem a caminho)`}
             >
               <div className="prd-sw-img" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
                 {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt={c.code} loading="lazy" />}
                 {c.hasOrder
                   ? <span className="prd-sw-qty">×{c.qty}</span>
-                  : <span className="prd-sw-alert" title="Sem pedido ativo">!</span>}
+                  : <span className="prd-sw-alert" title="Etiqueta sem pedido">!</span>}
               </div>
               <div className="prd-sw-code">{c.code}</div>
             </div>
@@ -514,13 +490,14 @@ function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder, onOpenPan
                 title={onOpenOrder ? 'Abrir o pedido' : undefined}
               >
                 📋 {o.name}
+                {o.status === 'sent' && <span className="prd-chip-eta">em revisão</span>}
                 {o.isLate
                   ? <span className="prd-chip-late">atrasado {o.daysLate}d</span>
                   : (o.expectedArrival ? <span className="prd-chip-eta">chega {formatDate(o.expectedArrival, 'full')}</span> : null)}
               </button>
             ))}
             {stuckCount > 0 && orders.length === 0 && (
-              <span className="prd-order-chip none">⚠ nenhum pedido ativo — considere encomendar ou tirar de produção</span>
+              <span className="prd-order-chip none">⚠ marcado "em produção" mas sem pedido nenhum — encomende ou tire a etiqueta no cadastro</span>
             )}
           </div>
         )}
@@ -559,7 +536,7 @@ function TransitCard({ transit, index, onPhotoClick, onOpenOrder }) {
 
   // Dias até a chegada (ou desde a data prevista, se passou)
   const etaDays = expectedArrival
-    ? Math.ceil((new Date(expectedArrival) - Date.now()) / 86400000)
+    ? Math.ceil((parseDateLocal(expectedArrival) - new Date(new Date().toDateString())) / 86400000)
     : null
 
   useEffect(() => {
@@ -597,7 +574,7 @@ function TransitCard({ transit, index, onPhotoClick, onOpenOrder }) {
           {etaDays != null && (
             <span className={`prd-eta-badge ${etaDays < 0 ? 'late' : (etaDays <= 7 ? 'soon' : '')}`}>
               {etaDays < 0
-                ? `previsto há ${Math.abs(etaDays)}d`
+                ? `previsto há ${Math.abs(etaDays)}d — já chegou? marque como concluído`
                 : etaDays === 0 ? 'chega hoje' : `chega em ${etaDays}d`}
             </span>
           )}
@@ -701,7 +678,7 @@ function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrde
       if (o.status === 'sent' || o.status === 'manufacturing') {
         const delay = computeOrderDelay(o, lead)
         const start = o.order_date || o.manufacturing_started_at || o.created_at
-        const elapsed = start ? Math.max(0, Math.floor((Date.now() - new Date(start)) / 86400000)) : null
+        const elapsed = start ? Math.max(0, Math.floor((Date.now() - parseDateLocal(start)) / 86400000)) : null
         const deadline = o.promised_lead_days || delay?.deadlineDays || null
         const pu = parseFloat(item.price_usd_snapshot ?? item.price_usd) || 0
         const fob = (item.colors || []).reduce((s, c) => {
@@ -773,6 +750,12 @@ function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrde
             <div className="prd-pan-total">
               {totalQty.toLocaleString('pt-BR')}<small> peças em produção agora</small>
             </div>
+            {/* v13.73 — o mesmo modelo pode estar sendo feito em mais de uma fábrica */}
+            {(group.factories || []).filter(f => f.qty > 0).length > 1 && (
+              <div className="prd-pan-hist">
+                Sendo feito em: {group.factories.filter(f => f.qty > 0).map(f => `${f.name} ${f.qty.toLocaleString('pt-BR')} pç`).join(' · ')}
+              </div>
+            )}
             <div className="prd-pan-hist">
               {data.histOrders > 0
                 ? <>Histórico: <strong>{data.histQty.toLocaleString('pt-BR')} peças</strong> em {data.histOrders} pedido{data.histOrders !== 1 ? 's' : ''}{data.lastDate ? ` · último em ${formatDate(data.lastDate, 'full')}` : ''}</>
@@ -799,7 +782,7 @@ function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrde
         {/* Pedidos ativos com barra de prazo */}
         <div className="prd-pan-sec">Pedidos ativos com este modelo</div>
         {data.active.length === 0 && (
-          <div className="prd-pan-none">⚠ Nenhum pedido ativo — as cores abaixo estão em produção sem encomenda. Considere encomendar ou tirar de produção.</div>
+          <div className="prd-pan-none">⚠ Nenhum pedido ativo — as cores abaixo estão marcadas "em produção" no cadastro, mas não estão em nenhum pedido (nem a caminho). Encomende ou tire a etiqueta.</div>
         )}
         {data.active.map(o => {
           const pct = o.deadline && o.elapsed != null ? Math.min(130, Math.round(o.elapsed / o.deadline * 100)) : null
@@ -927,6 +910,12 @@ const PRODUCAO_STYLES = `
   letter-spacing: -0.02em;
 }
 .prd-kpi-warn { color: var(--accent); font-size: 15px; font-weight: 600; }
+/* v13.73 — chegada vencida no lugar da "próxima chegada" que estava no passado */
+.prd-kpi-alert {
+  background: none; border: 0; padding: 0; cursor: pointer; font: inherit;
+}
+.prd-kpi-alert .prd-kpi-val, .prd-kpi-alert .prd-kpi-lbl { color: #DC2626; }
+.prd-kpi-alert:hover .prd-kpi-lbl { text-decoration: underline; }
 .prd-kpi-lbl {
   font-family: 'DM Mono', ui-monospace, monospace;
   font-size: 9px;
