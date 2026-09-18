@@ -18,6 +18,15 @@
 //   • O primeiro carregamento completo (ou uma reconstrução) é melhor pelo
 //     navegador, na aba Shopify — lá não existe limite de 150s.
 //
+// v13.74 — PERDA DE HISTÓRICO CORRIGIDA. Em set/2026 o cache amanheceu só
+// com pedidos a partir de 14/08: a leitura do cache (linha de vários MB)
+// falhou numa execução, o erro era IGNORADO e a função tratava como "sem
+// histórico" → buscava só 30 dias e SOBRESCREVIA os 6 meses. Agora:
+//   • falha ao ler o cache aborta sem gravar nada
+//   • se o resultado encolher mais da metade, aborta (proteção extra)
+//   • modo { source: 'backfill', from, to } reconstrói um período por vez
+//     (cada mês cabe folgado nos 150s), sem mexer no resto do cache
+//
 // Segurança: service_role só server-side; token da loja em secret.
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -125,10 +134,16 @@ serve(async (req) => {
 
   let source = 'cron'
   let skipOrders = false
+  let backfill: { from: number; to: number } | null = null
   try {
     const body = await req.json()
     if (body?.source) source = String(body.source)
     if (body?.skipOrders) skipOrders = true
+    if (body?.source === 'backfill') {
+      const from = new Date(body.from).getTime()
+      const to = new Date(body.to).getTime()
+      if (!isNaN(from) && !isNaN(to) && from < to) backfill = { from, to }
+    }
   } catch { /* sem body = cron */ }
 
   const result: Record<string, unknown> = { source, ok: false }
@@ -149,11 +164,41 @@ serve(async (req) => {
 
   try {
     // Estado atual do cache (pra saber de onde continuar e o que preservar)
-    const { data: cache } = await supa
+    const { data: cache, error: readErr } = await supa
       .from('shopify_cache')
       .select('orders, last_sync')
       .eq('id', 1)
       .single()
+    // NUNCA seguir sem saber o que já existe: seguir aqui apagava o histórico
+    if (readErr) throw new Error(`Não consegui ler o cache atual (nada foi gravado): ${readErr.message}`)
+    const prevOrders: any[] = Array.isArray(cache?.orders) ? cache!.orders : []
+
+    // ── BACKFILL: reconstrói só o período pedido, preserva todo o resto ──
+    if (backfill) {
+      const { from, to } = backfill
+      const ords = await fetchAll(
+        `orders.json?status=any&created_at_min=${new Date(from).toISOString()}&created_at_max=${new Date(to).toISOString()}&limit=250&fields=id,created_at,line_items`,
+        'orders',
+        40,
+      )
+      const tOf = (o: any) => (o?.created_at ? new Date(o.created_at).getTime() : NaN)
+      const preserved = prevOrders.filter(o => { const t = tOf(o); return !isNaN(t) && (t < from || t > to) })
+      const merged = [...preserved, ...slimOrders(ords.items)]
+        .sort((a, b) => tOf(a) - tOf(b))
+      const { error: bErr } = await supa.from('shopify_cache').update({
+        orders: merged,
+        orders_count: merged.length,
+        last_sync_ok: true,
+        last_sync_error: null,
+      }).eq('id', 1)
+      if (bErr) throw new Error(`Falha ao salvar backfill: ${bErr.message}`)
+      return new Response(JSON.stringify({
+        ...result, ok: true, backfill: true,
+        from: new Date(from).toISOString(), to: new Date(to).toISOString(),
+        fetched: ords.items.length, preserved: preserved.length, total: merged.length,
+        truncated: ords.truncated, ms: Date.now() - startedAt,
+      }), { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } })
+    }
 
     // ── 1) PRODUTOS: completos, salvos de imediato ──
     const prods = await fetchAll(
@@ -164,9 +209,11 @@ serve(async (req) => {
     result.products = prods.items.length
     result.productPages = prods.pages
 
+    // last_sync NÃO é gravado aqui: ele marca até onde os PEDIDOS estão em dia.
+    // Gravar antes (v13.69) fazia uma falha na etapa de pedidos deixar um buraco
+    // que o próximo incremental pulava.
     const { error: pErr } = await supa.from('shopify_cache').update({
       products: slimProducts(prods.items),
-      last_sync: new Date().toISOString(),
       last_sync_source: source,
       products_count: prods.items.length,
     }).eq('id', 1)
@@ -183,7 +230,6 @@ serve(async (req) => {
 
     // ── 2) PEDIDOS: incremental desde a última sincronização ──
     const cutoff = Date.now() - ORDERS_WINDOW_DAYS * 86400000
-    const prevOrders: any[] = Array.isArray(cache?.orders) ? cache!.orders : []
     const lastSyncMs = cache?.last_sync ? new Date(cache.last_sync).getTime() : NaN
 
     // Sem histórico → pega uma fatia recente (o full completo é pelo navegador)
@@ -205,6 +251,16 @@ serve(async (req) => {
       return !isNaN(t) && t >= cutoff && t < sinceMs
     })
     const merged = [...preserved, ...slimOrders(ords.items)]
+
+    // Proteção extra: um sync incremental nunca deveria encolher o histórico
+    // pela metade (a janela de 6 meses só perde um dia por vez)
+    const prevInWindow = prevOrders.filter(o => {
+      const t = o?.created_at ? new Date(o.created_at).getTime() : NaN
+      return !isNaN(t) && t >= cutoff
+    }).length
+    if (prevInWindow > 200 && merged.length < prevInWindow * 0.5) {
+      throw new Error(`Sync abortado: o histórico cairia de ${prevInWindow} para ${merged.length} pedidos (nada foi gravado)`)
+    }
 
     result.ordersNew = ords.items.length
     result.ordersPreserved = preserved.length

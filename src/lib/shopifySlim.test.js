@@ -2,7 +2,7 @@
 // v13.66 — Garante que o slim mantém o que o sistema usa e corta o resto.
 
 import { describe, it, expect } from 'vitest'
-import { slimShopifyProducts, slimShopifyOrders } from './shopifySlim'
+import { slimShopifyProducts, slimShopifyOrders, shopifyCoverageDays, coverageLabel } from './shopifySlim'
 
 // Variante "gorda" como a API real devolve (~25 campos)
 const fatVariant = {
@@ -56,5 +56,22 @@ describe('slimShopifyOrders', () => {
   it('nulos não quebram', () => {
     expect(slimShopifyOrders(null)).toEqual([])
     expect(slimShopifyOrders([{ line_items: null }])).toEqual([{ created_at: null, line_items: [] }])
+  })
+})
+
+
+describe('shopifyCoverageDays (v13.74)', () => {
+  const NOW = new Date('2026-09-18T12:00:00Z').getTime()
+  it('mede do pedido mais antigo até agora', () => {
+    expect(shopifyCoverageDays([{ created_at: '2026-08-14T12:00:00Z' }, { created_at: '2026-09-01T00:00:00Z' }], NOW)).toBe(35)
+  })
+  it('limita a 180 dias e trata cache vazio', () => {
+    expect(shopifyCoverageDays([{ created_at: '2025-01-01T00:00:00Z' }], NOW)).toBe(180)
+    expect(shopifyCoverageDays([], NOW)).toBe(0)
+  })
+  it('rótulo honesto do período', () => {
+    expect(coverageLabel(180)).toBe('6m')
+    expect(coverageLabel(35)).toBe('35d')
+    expect(coverageLabel(95)).toBe('3m')
   })
 })

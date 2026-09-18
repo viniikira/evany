@@ -138,6 +138,12 @@ export function OrderCard({ order: o, products = [], perm = {}, rate, leadTimeBy
               />
             )}
           </div>
+          {/* v13.74 — linha sem FOB e sem final entra como $0: avisar que o total está incompleto */}
+          {bal.unpricedQty > 0 && !bal.isManuallySettled && (
+            <div style={{ fontSize: 10.5, color: '#B45309', fontWeight: 700, marginTop: 4 }}>
+              🏷️ {bal.unpricedQty} peça{bal.unpricedQty !== 1 ? 's' : ''} sem preço — o total está incompleto
+            </div>
+          )}
           {isOpenDebt && bal.reservedBrl > 0 && (
             <div style={{ fontSize: 10.5, color: '#0891B2', marginTop: 4 }}>
               🏦 {fmtR$(bal.reservedBrl)} guardado{bal.isCovered ? ' (cobre tudo ✓)' : ` · faltam captar ${fmtR$(bal.toRaiseBrl)}`}

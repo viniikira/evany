@@ -494,7 +494,7 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                     <div style={{ fontSize: 15, fontWeight: 700 }}>🏭 {fa.name}</div>
                     <div style={{ fontSize: 11, marginTop: 4, opacity: .8 }}>
                       {nProds} modelo{nProds !== 1 ? 's' : ''}
-                      {lead ? ` · ~${lead.avgDays} dias` : ''}
+                      {lead ? ` · ~${lead.avgDays} dias (${lead.sampleSize} pedido${lead.sampleSize !== 1 ? 's' : ''})` : ''}
                     </div>
                   </button>
                 )

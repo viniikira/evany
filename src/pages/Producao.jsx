@@ -21,6 +21,7 @@ import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
 import { priceSignalForModel, suggestColorsForModel } from '../lib/orderIntelligence'
 import { formatDate, UC, parseDateLocal } from '../lib/utils'
 import { buildProductionView } from '../lib/production'
+import { shopifyCoverageDays, coverageLabel } from '../lib/shopifySlim'
 
 export default function ProducaoPage({
   products = [],
@@ -727,7 +728,7 @@ function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrde
     }
     if (matched === 0 && sold === 0) return null
     const ageDays = shopifyCache.last_sync ? Math.floor((Date.now() - new Date(shopifyCache.last_sync)) / 86400000) : null
-    return { stock, sold, ageDays }
+    return { stock, sold, ageDays, period: coverageLabel(shopifyCoverageDays(shopifyCache.orders)) }
   }, [product.color_variants, shopifyCache])
 
   const fmtR$ = (n) => 'R$ ' + Math.round(n).toLocaleString('pt-BR')
@@ -770,7 +771,7 @@ function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrde
             </div>
             {shop && (
               <div className="prd-pan-shop" title="Somado dos SKUs vinculados das cores deste produto">
-                🛒 Na loja: <strong>{shop.stock}</strong> em estoque · <strong>{shop.sold}</strong> vendidas (6m)
+                🛒 Na loja: <strong>{shop.stock}</strong> em estoque · <strong>{shop.sold}</strong> vendidas ({shop.period})
                 {shop.ageDays != null && shop.ageDays > 7 && (
                   <span className="prd-pan-shop-age"> ⚠ dados de {shop.ageDays}d atrás — sincronize na aba Shopify</span>
                 )}

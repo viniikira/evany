@@ -193,6 +193,14 @@ export function computeOrderFinal(order) {
     else estimated += l.finalTotal
   }
   const withQty = lines.filter(l => l.qty > 0)
+  // v13.74 — linha sem FOB e sem final entra como $0 no total, em silêncio
+  // (Julho 2026 tinha 150 peças assim; MAIO 2025 inteiro). Quem mostra o
+  // total precisa saber que ele está incompleto.
+  const unpriced = withQty.filter(l => !l.isConfirmed && !(l.fobUnit > 0))
+  // Multiplicador só onde existe FOB: linha com final e sem FOB inflava a conta
+  const withFob = withQty.filter(l => l.fobUnit > 0)
+  const fobBase = withFob.reduce((s, l) => s + l.fobTotal, 0)
+  const finalOnFob = withFob.reduce((s, l) => s + l.finalTotal, 0)
   return {
     total,
     confirmed,
@@ -202,8 +210,10 @@ export function computeOrderFinal(order) {
     linesTotal: withQty.length,
     linesConfirmed: withQty.filter(l => l.isConfirmed).length,
     fobTotal,
-    // Multiplicador efetivo do pedido (final ÷ FOB)
-    multiplier: fobTotal > 0 ? total / fobTotal : null,
+    unpricedQty: unpriced.reduce((s, l) => s + l.qty, 0),
+    unpricedLines: unpriced.length,
+    // Multiplicador efetivo do pedido (final ÷ FOB, só nas linhas com FOB)
+    multiplier: fobBase > 0 ? finalOnFob / fobBase : null,
   }
 }
 

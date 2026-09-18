@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { listProducts } from '../lib/data/products'
 import { listColors, getShopifyCache, setShopifyCache, setShopifyCacheProducts, addLog as writeLog } from '../lib/data/misc'
+import { shopifyCoverageDays, coverageLabel } from '../lib/shopifySlim'
 import { useToast } from '../components/ui'
 import { ProgressBar } from '../components/ProgressBar'
 import { toastError } from '../lib/errors'
@@ -165,20 +166,21 @@ export default function ShopifyPage({ user, perm }) {
     for (const o of (cache.orders || [])) {
       for (const li of (o.line_items || [])) {
         if (!li.sku) continue
-        const cur = sales.get(li.sku) || { qty: 0, revenue: 0, orderCount: 0, lastSaleDate: null, weekQty: 0 }
+        const skuKey = String(li.sku).trim().toUpperCase()
+        const cur = sales.get(skuKey) || { qty: 0, revenue: 0, orderCount: 0, lastSaleDate: null, weekQty: 0 }
         cur.qty += li.quantity
         cur.revenue += parseFloat(li.price) * li.quantity
         cur.orderCount++
         const d = new Date(o.created_at)
         if (!cur.lastSaleDate || d > cur.lastSaleDate) cur.lastSaleDate = d
         if (d > new Date(Date.now() - 7 * 86400000)) cur.weekQty += li.quantity
-        sales.set(li.sku, cur)
+        sales.set(skuKey, cur)
       }
     }
     for (const p of (cache.products || [])) {
       for (const v of (p.variants || [])) {
         if (!v.sku) continue
-        stocks.set(v.sku, { stock: v.inventory_quantity || 0, title: p.title })
+        stocks.set(String(v.sku).trim().toUpperCase(), { stock: v.inventory_quantity || 0, title: p.title })
       }
     }
     return { salesBySku: sales, stockBySku: stocks }
@@ -205,15 +207,20 @@ export default function ShopifyPage({ user, perm }) {
     return out
   }, [products, colors])
 
+  // v13.74 — período que o cache cobre de verdade (não 180 fixo)
+  const coverageDays = useMemo(() => shopifyCoverageDays(cache.orders), [cache])
+  const period = coverageLabel(coverageDays)
+
   const skuData = useMemo(() => {
     return systemSkus.map(s => {
-      const sales = salesBySku.get(s.sku) || { qty: 0, revenue: 0, orderCount: 0, lastSaleDate: null, weekQty: 0 }
-      const stock = stockBySku.get(s.sku)
-      const dailyRate = sales.qty / 180
+      const key = String(s.sku).trim().toUpperCase()
+      const sales = salesBySku.get(key) || { qty: 0, revenue: 0, orderCount: 0, lastSaleDate: null, weekQty: 0 }
+      const stock = stockBySku.get(key)
+      const dailyRate = coverageDays > 0 ? sales.qty / coverageDays : 0
       const daysLeft = dailyRate > 0 && stock?.stock != null ? Math.round(stock.stock / dailyRate) : null
       return { ...s, ...sales, stock: stock?.stock ?? null, shopifyTitle: stock?.title, dailyRate, daysLeft }
     })
-  }, [systemSkus, salesBySku, stockBySku])
+  }, [systemSkus, salesBySku, stockBySku, coverageDays])
 
   const linked = skuData.filter(s => s.stock !== null || s.qty > 0)
   const needsRestock = linked.filter(s => s.daysLeft !== null && s.daysLeft < 21 && s.daysLeft >= 0)
@@ -282,7 +289,7 @@ export default function ShopifyPage({ user, perm }) {
       <>
         <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
           <div className="stat-card"><div className="stat-val" style={{ color: '#8B5CF6', fontSize: 24 }}>{linked.length}/{systemSkus.length}</div><div className="stat-lbl">Vinculados</div></div>
-          <div className="stat-card"><div className="stat-val" style={{ color: '#10B981', fontSize: 20 }}>R$ {totalRevenue.toFixed(0)}</div><div className="stat-lbl">Receita 6m</div></div>
+          <div className="stat-card"><div className="stat-val" style={{ color: '#10B981', fontSize: 20 }}>R$ {totalRevenue.toFixed(0)}</div><div className="stat-lbl" title={`Período coberto pelos dados da loja: ${coverageDays} dias`}>Receita {period}</div></div>
           <div className="stat-card"><div className="stat-val" style={{ fontSize: 24 }}>{totalQty}</div><div className="stat-lbl">Vendidas</div></div>
           <div className="stat-card"><div className="stat-val" style={{ color: needsRestock.length > 0 ? '#EF4444' : '#10B981', fontSize: 24 }}>{needsRestock.length}</div><div className="stat-lbl">Repor</div></div>
         </div>
@@ -308,7 +315,7 @@ export default function ShopifyPage({ user, perm }) {
 
         {topPerformers.length > 0 && (
           <div className="card">
-            <div className="card-title">Top 10 mais vendidos (6m)</div>
+            <div className="card-title">Top 10 mais vendidos ({period})</div>
             <table className="data-table">
               <thead><tr><th>Produto</th><th>Cor</th><th>Vendidos</th><th>Receita</th><th>Estoque</th></tr></thead>
               <tbody>{topPerformers.map(s => (

@@ -1,4 +1,5 @@
 import { parseDateLocal } from './utils'
+import { computeOrderBalance } from './financial'
 
 // src/lib/pendencias.js
 // Sistema de awareness: calcula pendências automáticas a partir do estado atual.
@@ -75,9 +76,13 @@ export function computePendencias({ products = [], orders = [], ideas = [] }) {
     const daysSince = DAYS(p.updated_at || p.created_at)
     if (daysSince >= 60) {
       // Verifica se tem pedido recente
+      // v13.74 — pedido ATIVO também conta: ANA MARIA/CICERA/VÂNIA/VIRGINIA
+      // estavam em fabricação e o sino dizia "sem pedido" (o pedido tinha
+      // sido digitado há mais de 60 dias)
       const hasRecentOrder = orders.some(o =>
+        !o.deleted_at &&
         (o.items || []).some(it => it.product_id === p.id) &&
-        DAYS(o.created_at) < 60
+        (['sent', 'manufacturing', 'in_transit'].includes(o.status) || DAYS(o.created_at) < 60)
       )
       if (!hasRecentOrder) {
         out.push({
@@ -128,38 +133,108 @@ export function computePendencias({ products = [], orders = [], ideas = [] }) {
   
   // 4b. Pedido CONCLUÍDO mas pagamento incompleto — alta prioridade
   // (recebi a mercadoria mas ainda devo dinheiro pra fábrica)
+  // v13.74 — usa computeOrderBalance: antes media contra o FOB (a dívida real
+  // é o valor final da trading) e ignorava "Marcar como pago" — o Outubro 2025,
+  // quitado à mão, aparecia como "pago apenas 0%".
   for (const o of orders) {
-    if (o.status !== 'completed') continue
-    
-    const fobTotal = (o.items || []).reduce((sum, it) => {
-      const cls = it.colors || []
-      const itemPrice = parseFloat(it.price_usd_snapshot || it.price_usd || 0)
-      const fromColors = cls.reduce((b, c) => {
-        const qty = Number(c.qty || 0)
-        const cprice = c.price_usd != null && c.price_usd !== '' ? parseFloat(c.price_usd) : itemPrice
-        return b + qty * (cprice || 0)
-      }, 0)
-      return sum + fromColors + (cls.length === 0 ? itemPrice * Number(it.quantity || 0) : 0)
-    }, 0)
-    
-    if (fobTotal <= 0) continue
-    
-    const paidUsd = (o.payments || []).reduce((a, p) => a + (parseFloat(p.amount_usd) || 0), 0)
-    const remaining = fobTotal - paidUsd
-    if (remaining > 0.01) {
-      const percentPaid = (paidUsd / fobTotal) * 100
+    if (o.status !== 'completed' || o.deleted_at) continue
+    const bal = computeOrderBalance(o)
+    if (bal.isSettled || !(bal.total > 0) || bal.remainingUsd <= 0.01) continue
+    out.push({
+      id: `order-completed-unpaid-${o.id}`,
+      priority: 1,  // urgente
+      kind: 'order_completed_unpaid',
+      icon: '💸',
+      title: `Pedido "${o.order_name || o.factory}" concluído com pagamento incompleto`,
+      description: `Pago ${bal.percentPaid.toFixed(0)}% ($ ${bal.paidUsd.toFixed(2)} de $ ${bal.total.toFixed(2)}${bal.isFullyConfirmed ? '' : ', parte estimada'}). Faltam $ ${bal.remainingUsd.toFixed(2)} — ou marque como pago se já quitou fora do sistema.`,
+      target: { type: 'order', id: o.id },
+    })
+  }
+
+  // v13.74 — PEDIDOS QUE O SISTEMA NÃO CONSEGUIA VER COMO PROBLEMA
+  const todayMs = new Date(new Date().toDateString()).getTime()
+  for (const o of orders) {
+    if (o.deleted_at) continue
+    const name = o.order_name || o.factory
+
+    // Em trânsito com a chegada prevista vencida (NOVEMBRO 2025: 121 dias)
+    if (o.status === 'in_transit' && o.expected_arrival) {
+      const t = parseDateLocal(o.expected_arrival)?.getTime()
+      if (t != null && t < todayMs) {
+        const d = Math.floor((todayMs - t) / 86400000)
+        out.push({
+          id: `transit-overdue-${o.id}`,
+          priority: d >= 30 ? 1 : 2,
+          kind: 'transit_overdue',
+          icon: '🚢',
+          title: `"${name}": chegada prevista passou há ${d} dia(s)`,
+          description: `Já chegou? Marque como concluído. Se não, atualize a previsão de chegada.`,
+          target: { type: 'order', id: o.id },
+        })
+      }
+    }
+
+    // Em revisão há muito tempo (a fábrica/trading não devolveu?)
+    if (o.status === 'sent') {
+      const sentAt = [...(o.status_history || [])].reverse().find(h => h?.status === 'sent')?.at || o.created_at
+      const d = sentAt ? DAYS(sentAt) : 0
+      if (d >= 30) {
+        out.push({
+          id: `sent-stale-${o.id}`,
+          priority: 2,
+          kind: 'sent_stale',
+          icon: '🔍',
+          title: `"${name}" em revisão há ${d} dias`,
+          description: `Cobre a revisão com ${o.factory} — ou avance o status se ele já está em fabricação.`,
+          target: { type: 'order', id: o.id },
+        })
+      }
+    }
+
+    // Em fabricação sem data de início: o atraso nunca é calculado
+    if (o.status === 'manufacturing' && !o.order_date && !o.manufacturing_started_at) {
       out.push({
-        id: `order-completed-unpaid-${o.id}`,
-        priority: 1,  // urgente
-        kind: 'order_completed_unpaid',
-        icon: '💸',
-        title: `Pedido "${o.order_name || o.factory}" concluído com pagamento incompleto`,
-        description: `Pago apenas ${percentPaid.toFixed(0)}% ($ ${paidUsd.toFixed(2)} de $ ${fobTotal.toFixed(2)}). Restam $ ${remaining.toFixed(2)} pra pagar.`,
+        id: `mfg-nostart-${o.id}`,
+        priority: 2,
+        kind: 'mfg_no_start',
+        icon: '📅',
+        title: `"${name}" em fabricação sem data do pedido`,
+        description: `Sem data de início o sistema não consegue avisar atraso. Preencha a data do pedido.`,
+        target: { type: 'order', id: o.id },
+      })
+    }
+
+    // Peças sem preço nenhum: o total do pedido fica menor do que é
+    if (o.status !== 'draft' && !o.settled_at) {
+      const bal = computeOrderBalance(o)
+      if (bal.unpricedQty > 0) {
+        out.push({
+          id: `unpriced-${o.id}`,
+          priority: 2,
+          kind: 'order_unpriced',
+          icon: '🏷️',
+          title: `"${name}": ${bal.unpricedQty} peça(s) sem preço`,
+          description: `Sem FOB nem valor final, elas entram como $0 — o total e o "falta pagar" estão menores do que são.`,
+          target: { type: 'order', id: o.id },
+        })
+      }
+    }
+
+    // Pagamento lançado totalmente vazio (sem valor e sem data)
+    const empty = (o.payments || []).filter(p => !p.amount_usd && !p.amount_brl && !p.payment_date)
+    if (empty.length > 0) {
+      out.push({
+        id: `payment-empty-${o.id}`,
+        priority: 3,
+        kind: 'payment_empty',
+        icon: '🧾',
+        title: `${empty.length} pagamento(s) vazio(s) em "${name}"`,
+        description: `Sem valor e sem data — apague ou preencha.`,
         target: { type: 'order', id: o.id },
       })
     }
   }
-  
+
   // 5. Produto sem foto principal mas com galeria
   for (const p of products) {
     if (p.status === 'discontinued') continue
@@ -197,22 +272,40 @@ export function computePendencias({ products = [], orders = [], ideas = [] }) {
 }
 
 /**
- * Calcula prazo médio em dias por fábrica baseado nos pedidos concluídos.
- * Usa: data de criação → data de conclusão (updated_at do pedido em status completed).
- * @param {Array} orders 
+ * Prazo médio de FABRICAÇÃO por fábrica, dos pedidos que já saíram da fábrica.
+ *
+ * v13.74 — antes usava created_at → updated_at: created_at é quando o pedido
+ * foi DIGITADO (pedidos antigos foram cadastrados de uma vez em abril/2026) e
+ * updated_at muda em qualquer edição. Resultado real: "HAIRCHUAN ~2 dias"
+ * (MAIO 2025 digitado e concluído em 2 dias) e "EPF ~100 dias" (dias entre
+ * cadastrar e marcar como pago). Esse número aparecia no criador de pedido e
+ * era sugerido como prazo prometido.
+ *
+ * Agora: início = order_date (ou manufacturing_started_at) → fim = primeira vez
+ * que o pedido saiu da fábrica no histórico (em trânsito ou concluído). Sem
+ * uma das duas pontas, o pedido não entra na média.
+ * @param {Array} orders
  * @returns {Map<string, {avgDays, sampleSize}>}
  */
 export function computeFactoryLeadTime(orders = []) {
   const byFactory = new Map()
   for (const o of orders) {
-    if (o.status !== 'completed') continue
-    if (!o.factory || !o.created_at || !o.updated_at) continue
-    const days = Math.floor((new Date(o.updated_at) - new Date(o.created_at)) / 86400000)
-    if (days <= 0 || days > 365) continue  // Filtra outliers (pedido criado e concluído no mesmo dia ou >1 ano)
+    if (!o || o.deleted_at || !o.factory) continue
+    if (o.status !== 'in_transit' && o.status !== 'completed') continue
+    const start = parseDateLocal(o.order_date || o.manufacturing_started_at)
+    if (!start) continue
+    const left = (o.status_history || [])
+      .filter(h => h && (h.status === 'in_transit' || h.status === 'completed') && h.at)
+      .map(h => new Date(h.at).getTime())
+      .filter(t => !isNaN(t))
+      .sort((a, b) => a - b)[0]
+    if (left == null) continue
+    const days = Math.floor((left - start.getTime()) / 86400000)
+    if (days <= 0 || days > 365) continue  // outliers / datas inconsistentes
     if (!byFactory.has(o.factory)) byFactory.set(o.factory, [])
     byFactory.get(o.factory).push(days)
   }
-  
+
   const result = new Map()
   for (const [factory, daysList] of byFactory) {
     const avg = Math.round(daysList.reduce((a, d) => a + d, 0) / daysList.length)

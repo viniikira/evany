@@ -20,6 +20,7 @@ import { useStickyFilter, clearStickyFilters } from '../lib/hooks'
 import { uid, formatDate, UC } from '../lib/utils'
 import { trackAction } from '../lib/analytics'
 import { log } from '../lib/logger'
+import { shopifyCoverageDays, coverageLabel } from '../lib/shopifySlim'
 import {
   FINISH, REP_TYPES, REP_SIZES, REP_ACAB, HTYPES, HLENS, MATERIALS,
   PROD_ST, COLOR_STATUSES, PROD_SORT_ORDER, normSearch, ORDER_ST,
@@ -1229,18 +1230,18 @@ function ProductDetail({ product: p, onClose, onEdit, onDelete, onStatus, onConv
     if (!shopifyCache) return null
     const skus = (p.color_variants || []).map(cv => cv.sku).filter(Boolean)
     if (skus.length === 0 && !p.sku) return null
-    const allSkus = p.sku ? [...skus, p.sku] : skus
+    const allSkus = new Set((p.sku ? [...skus, p.sku] : skus).map(s => String(s).trim().toUpperCase()))
     const so = shopifyCache.orders || []
     let qty = 0, revenue = 0
     for (const o of so) {
       for (const li of (o.line_items || [])) {
-        if (allSkus.includes(li.sku)) {
+        if (li.sku && allSkus.has(String(li.sku).trim().toUpperCase())) {
           qty += li.quantity
           revenue += parseFloat(li.price) * li.quantity
         }
       }
     }
-    return { qty, revenue }
+    return { qty, revenue, period: coverageLabel(shopifyCoverageDays(so)) }
   }, [shopifyCache, p])
 
   const colorStatusCount = useMemo(() => {
@@ -1322,7 +1323,7 @@ function ProductDetail({ product: p, onClose, onEdit, onDelete, onStatus, onConv
             {perm.shopify && salesSummary && (
               <div style={{ background: '#F0FDF4', padding: 10, borderRadius: 8, textAlign: 'center' }}>
                 <div style={{ fontSize: 22, fontWeight: 700, color: '#166534' }}>{salesSummary.qty}</div>
-                <div className="text-muted text-xs">VENDIDOS (6m)</div>
+                <div className="text-muted text-xs">VENDIDOS ({salesSummary.period})</div>
               </div>
             )}
           </div>

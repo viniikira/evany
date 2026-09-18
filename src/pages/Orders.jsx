@@ -680,8 +680,13 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
           const prod = products.find(p => p.id === pid)
           if (!prod) continue
           
+          // v13.74 — REPOSIÇÃO não rebaixa: cor que já está no catálogo (vendendo
+          // na loja) continua no catálogo quando o pedido vai pra fabricação.
+          // Antes ela virava "Em Produção" — e se o pedido voltasse pra revisão,
+          // a reversão a jogava pra "Ideia".
           const toUpdate = colorList
             .filter(c => c.exists && c.existingStatus !== 'discontinued')
+            .filter(c => !(colorTarget === 'production' && c.existingStatus === 'catalog'))
             .map(c => c.code)
           if (toUpdate.length > 0) {
             await bulkUpdateColorStatus(pid, toUpdate, colorTarget)

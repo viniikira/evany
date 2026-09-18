@@ -33,3 +33,26 @@ export function slimShopifyOrders(orders) {
     })),
   }))
 }
+
+// v13.74 — quantos dias de vendas o cache REALMENTE cobre. As telas diziam
+// "vendidas (6m)" e o alerta de reposição dividia por 180 fixo, mas em set/2026
+// o cache tinha só ~35 dias (o sync noturno perdeu o histórico): a venda diária
+// saía ~5x menor e "vai acabar em X dias" nunca disparava.
+export function shopifyCoverageDays(orders, now = Date.now(), maxDays = 180) {
+  let oldest = Infinity
+  for (const o of orders || []) {
+    const t = o?.created_at ? new Date(o.created_at).getTime() : NaN
+    if (!isNaN(t) && t < oldest) oldest = t
+  }
+  if (!isFinite(oldest)) return 0
+  const days = Math.ceil((now - oldest) / 86400000)
+  return Math.max(1, Math.min(maxDays, days))
+}
+
+// Rótulo curto do período coberto: "6m", "5m", "35d"
+export function coverageLabel(days) {
+  if (!days) return 'sem dados'
+  if (days >= 170) return '6m'
+  if (days >= 60) return `${Math.round(days / 30)}m`
+  return `${days}d`
+}

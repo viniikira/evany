@@ -27,10 +27,14 @@ describe('computeFactoryLeadTime', () => {
     expect(computeFactoryLeadTime(orders).size).toBe(0)
   })
   
+  // v13.74 — prazo = data do pedido → saída da fábrica (histórico), não mais
+  // cadastro → última edição (dava "HAIRCHUAN ~2 dias" com os dados reais)
+  const left = (at, status = 'completed') => ({ status_history: [{ status, at }] })
+
   it('calcula média por fábrica', () => {
     const orders = [
-      order({ factory: 'EPF', created_at: '2026-01-01', updated_at: '2026-02-01' }),  // 31d
-      order({ factory: 'EPF', created_at: '2026-01-01', updated_at: '2026-02-21' }),  // 51d
+      order({ factory: 'EPF', order_date: '2026-01-01', ...left('2026-02-01T12:00:00Z') }),  // 31d
+      order({ factory: 'EPF', order_date: '2026-01-01', ...left('2026-02-21T12:00:00Z') }),  // 51d
     ]
     const r = computeFactoryLeadTime(orders)
     expect(r.get('EPF').avgDays).toBe(41)
@@ -39,8 +43,8 @@ describe('computeFactoryLeadTime', () => {
   
   it('separa por fábrica', () => {
     const orders = [
-      order({ factory: 'EPF', created_at: '2026-01-01', updated_at: '2026-02-01' }),
-      order({ factory: 'Hairchuan', created_at: '2026-01-01', updated_at: '2026-03-01' }),
+      order({ factory: 'EPF', order_date: '2026-01-01', ...left('2026-02-01T12:00:00Z') }),
+      order({ factory: 'Hairchuan', order_date: '2026-01-01', ...left('2026-03-01T12:00:00Z', 'in_transit') }),
     ]
     const r = computeFactoryLeadTime(orders)
     expect(r.has('EPF')).toBe(true)
@@ -50,13 +54,33 @@ describe('computeFactoryLeadTime', () => {
   
   it('filtra outliers (mesmo dia ou >365 dias)', () => {
     const orders = [
-      order({ created_at: '2026-01-01', updated_at: '2026-01-01' }),  // 0 dias → ignorado
-      order({ created_at: '2024-01-01', updated_at: '2026-01-01' }),  // >365 → ignorado
-      order({ created_at: '2026-01-01', updated_at: '2026-02-01' }),  // 31 → ok
+      order({ order_date: '2026-01-01', ...left('2026-01-01T12:00:00Z') }),  // 0 dias → ignorado
+      order({ order_date: '2024-01-01', ...left('2026-01-01T12:00:00Z') }),  // >365 → ignorado
+      order({ order_date: '2026-01-01', ...left('2026-02-01T12:00:00Z') }),  // 31 → ok
     ]
     const r = computeFactoryLeadTime(orders)
     expect(r.get('EPF').sampleSize).toBe(1)
     expect(r.get('EPF').avgDays).toBe(31)
+  })
+
+  it('ignora data de cadastro/edição: pedido digitado e concluído depois não vira "2 dias"', () => {
+    // Caso real: MAIO 2025 digitado em 20/04/2026 e concluído em 22/04/2026,
+    // sem data do pedido nem histórico
+    const r = computeFactoryLeadTime([
+      order({ factory: 'HAIRCHUAN', created_at: '2026-04-20T02:05:47Z', updated_at: '2026-04-22T00:00:00Z', status_history: [] }),
+    ])
+    expect(r.has('HAIRCHUAN')).toBe(false)
+  })
+
+  it('usa a PRIMEIRA saída da fábrica (em trânsito antes de concluído)', () => {
+    const r = computeFactoryLeadTime([order({
+      status: 'completed', order_date: '2026-01-01',
+      status_history: [
+        { status: 'in_transit', at: '2026-03-02T12:00:00Z' },   // 60 dias
+        { status: 'completed', at: '2026-04-15T12:00:00Z' },
+      ],
+    })])
+    expect(r.get('EPF').avgDays).toBe(60)
   })
   
   it('ignora pedido sem factory ou sem datas', () => {

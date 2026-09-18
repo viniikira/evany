@@ -338,67 +338,53 @@ describe('payment_nodate', () => {
 // Tipo 6: order_completed_unpaid (CRÍTICO)
 // ═══════════════════════════════════════════════════════════════════
 describe('order_completed_unpaid', () => {
+  // v13.74 — a dívida é o valor FINAL da trading (não o FOB) e "Marcar como
+  // pago" encerra a cobrança. Itens com final confirmado de $100 pra os números
+  // ficarem redondos.
+  const item100 = { price_usd_snapshot: 60, final_price_usd: 100, colors: [{ qty: 1 }] }
+
   it('detecta concluído com saldo aberto', () => {
-    const o = order({
-      status: 'completed',
-      items: [{ price_usd_snapshot: 100, colors: [{ qty: 1 }] }],
-      payments: [payment({ amount_usd: '40' })],  // 40% pago
-    })
+    const o = order({ status: 'completed', items: [item100], payments: [payment({ amount_usd: '40' })] })
     const r = computePendencias({ orders: [o] })
     expect(r.filter(p => p.kind === 'order_completed_unpaid')).toHaveLength(1)
   })
-  
+
   it('priority é 1 (urgente)', () => {
-    const o = order({
-      status: 'completed',
-      items: [{ price_usd_snapshot: 100, colors: [{ qty: 1 }] }],
-      payments: [],
-    })
-    const r = computePendencias({ orders: [o] })
-    const u = r.find(p => p.kind === 'order_completed_unpaid')
+    const o = order({ status: 'completed', items: [item100], payments: [] })
+    const u = computePendencias({ orders: [o] }).find(p => p.kind === 'order_completed_unpaid')
     expect(u.priority).toBe(1)
   })
-  
+
   it('totalmente pago NÃO gera', () => {
-    const o = order({
-      status: 'completed',
-      items: [{ price_usd_snapshot: 100, colors: [{ qty: 1 }] }],
-      payments: [payment({ amount_usd: '100' })],
-    })
-    const r = computePendencias({ orders: [o] })
-    expect(r.filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
+    const o = order({ status: 'completed', items: [item100], payments: [payment({ amount_usd: '100' })] })
+    expect(computePendencias({ orders: [o] }).filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
   })
-  
+
+  it('pagar só o FOB NÃO quita: a dívida é o valor final', () => {
+    const o = order({ status: 'completed', items: [item100], payments: [payment({ amount_usd: '60' })] })
+    expect(computePendencias({ orders: [o] }).filter(p => p.kind === 'order_completed_unpaid')).toHaveLength(1)
+  })
+
+  it('"Marcar como pago" encerra a cobrança (caso real: Outubro 2025)', () => {
+    const o = order({ status: 'completed', items: [item100], payments: [], settled_at: '2026-07-30' })
+    expect(computePendencias({ orders: [o] }).filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
+  })
+
   it('manufacturing/sent NÃO entram nessa regra', () => {
     for (const s of ['manufacturing', 'sent']) {
-      const o = order({
-        status: s,
-        items: [{ price_usd_snapshot: 100, colors: [{ qty: 1 }] }],
-        payments: [],
-      })
-      const r = computePendencias({ orders: [o] })
-      expect(r.filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
+      const o = order({ status: s, items: [item100], payments: [] })
+      expect(computePendencias({ orders: [o] }).filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
     }
   })
-  
-  it('FOB zero (sem preços) NÃO gera', () => {
-    const o = order({
-      status: 'completed',
-      items: [{ colors: [{ qty: 1 }] }],  // sem price_usd
-      payments: [],
-    })
-    const r = computePendencias({ orders: [o] })
-    expect(r.filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
+
+  it('sem preço nenhum NÃO gera (vira outra pendência: peças sem preço)', () => {
+    const o = order({ status: 'completed', items: [{ colors: [{ qty: 1 }] }], payments: [] })
+    expect(computePendencias({ orders: [o] }).filter(p => p.kind === 'order_completed_unpaid')).toEqual([])
   })
-  
+
   it('description menciona % e valores', () => {
-    const o = order({
-      status: 'completed',
-      items: [{ price_usd_snapshot: 100, colors: [{ qty: 1 }] }],
-      payments: [payment({ amount_usd: '40' })],
-    })
-    const r = computePendencias({ orders: [o] })
-    const u = r.find(p => p.kind === 'order_completed_unpaid')
+    const o = order({ status: 'completed', items: [item100], payments: [payment({ amount_usd: '40' })] })
+    const u = computePendencias({ orders: [o] }).find(p => p.kind === 'order_completed_unpaid')
     expect(u.description).toMatch(/40/)
     expect(u.description).toMatch(/60/)
   })

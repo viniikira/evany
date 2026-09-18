@@ -13,13 +13,18 @@ const MAX_ATTENTIONS = 6  // limita pra não inundar a UI
 // Reusável: detecta cores em production sem pedido ativo correspondente.
 // Retorna array de { product, colorVariant }.
 // Pedido ativo = sent + manufacturing + in_transit com a cor presente nos items.
+// v13.74 — código comparado sem diferenciar maiúsculas/espaços: o cadastro da
+// CASSANDRA/THALITA tem "NTPDHL1B/8/26R" e o pedido "NTPDHL1b/8/26R" → alarme falso.
+const normCode = (s) => (s || '').toString().trim().toLowerCase()
+
 export function findStuckColors(orders = [], products = []) {
   const activeColorCodes = new Set()
   for (const o of orders) {
+    if (o.deleted_at) continue
     if (o.status !== 'sent' && o.status !== 'manufacturing' && o.status !== 'in_transit') continue
     for (const it of (o.items || [])) {
       for (const c of (it.colors || [])) {
-        if (c.code) activeColorCodes.add(`${it.product_id || ''}|${c.code}`)
+        if (c.code) activeColorCodes.add(`${it.product_id || ''}|${normCode(c.code)}`)
       }
     }
   }
@@ -28,7 +33,7 @@ export function findStuckColors(orders = [], products = []) {
   for (const p of products) {
     for (const cv of (p.color_variants || [])) {
       if (cv.status !== 'production') continue
-      const key = `${p.id}|${cv.code}`
+      const key = `${p.id}|${normCode(cv.code)}`
       if (activeColorCodes.has(key)) continue
       stuck.push({ product: p, colorVariant: cv })
     }
