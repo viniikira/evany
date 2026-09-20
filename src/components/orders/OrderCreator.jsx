@@ -19,8 +19,19 @@ import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
 import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel } from '../../lib/orderIntelligence'
 import { proposeOrderName } from '../../lib/orderNaming'
+import { buildRestockView, restockForColor, DEFAULT_TARGET_COVER_DAYS } from '../../lib/restock'
 import { ORDER_ST } from '../../lib/constants'
-import { uid, UC, formatDate } from '../../lib/utils'
+import { uid, UC, formatDate, parseDateLocal } from '../../lib/utils'
+
+// v13.75 — como cada situação do radar aparece
+const RADAR_TONE = {
+  ruptura:   { icon: '🔴', label: 'zerado na loja', bg: '#FEE2E2', fg: '#991B1B' },
+  critico:   { icon: '🟠', label: 'acabando',       bg: '#FFEDD5', fg: '#9A3412' },
+  ok:        { icon: '🟢', label: 'saudável',       bg: '#DCFCE7', fg: '#166534' },
+  excesso:   { icon: '🔵', label: 'estoque de sobra', bg: '#DBEAFE', fg: '#1E40AF' },
+  parado:    { icon: '⚪', label: 'sem venda no período', bg: '#F3F4F6', fg: '#4B5563' },
+  sem_dados: { icon: '⚪', label: 'sem dados da loja', bg: '#F3F4F6', fg: '#4B5563' },
+}
 
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
@@ -52,7 +63,7 @@ const itemsFromOrder = (src) => (src?.items || []).map(it => ({
   })),
 }))
 
-export function OrderCreator({ order = null, prefill = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), onSave, onClose }) {
+export function OrderCreator({ order = null, prefill = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), shopifyCache = null, onSave, onClose }) {
   const confirm = useConfirm()
   const toast = useToast()
   const isEdit = !!(order && order.id)
@@ -233,6 +244,77 @@ export function OrderCreator({ order = null, prefill = null, factories, products
     return m
   }, [orders, order?.id])
 
+  // ── RADAR DA LOJA (v13.75) ──
+  // A sugestão antiga vinha só da média do que ela já pediu — repetia o passado.
+  // Agora cruza VENDE (Shopify) · TEM (estoque) · VEM (pedidos ativos): ver
+  // src/lib/restock.js. Tudo recalculado quando a fábrica muda, porque o prazo
+  // da fábrica entra na conta de quanto pedir.
+  const [coverTarget, setCoverTarget] = useState(DEFAULT_TARGET_COVER_DAYS)
+  const radar = useMemo(() => buildRestockView({
+    products, orders, shopifyCache, leadTimeByFactory,
+    factory: f.factory || null, targetCoverDays: coverTarget, excludeOrderId: order?.id,
+  }), [products, orders, shopifyCache, leadTimeByFactory, f.factory, coverTarget, order?.id])
+
+  const leadDaysNow = leadTimeByFactory.get(f.factory)?.avgDays || 120
+  const [radarExpanded, setRadarExpanded] = useState(false)
+  // Com a fábrica escolhida, mostra só os modelos dela (+ os sem fábrica)
+  const radarUrgent = useMemo(() => (
+    f.factory
+      ? radar.urgent.filter(r => !r.product.factory || r.product.factory === f.factory)
+      : radar.urgent
+  ), [radar, f.factory])
+
+  // "+ adicionar" do radar: entra com as cores que VENDEM, já com a quantidade
+  // sugerida por cor; sem SKU ligado, distribui a sugestão nas cores usuais.
+  const addFromRadar = (row) => {
+    const prod = row.product
+    if ((f.items || []).some(it => it.product_id === prod.id)) return
+    const byColor = []
+    for (const cv of (prod.color_variants || [])) {
+      if (cv.status === 'discontinued') continue
+      const cr = colorRadar(prod.id, cv.code)
+      if (cr && cr.suggestedQty > 0) byColor.push({ code: cv.code, qty: cr.suggestedQty, _fromProduct: true })
+    }
+    if (byColor.length === 0) {
+      // Sem SKU ligado: as cores que ela costuma pedir; sem histórico, as cores
+      // cadastradas do modelo. A sugestão do modelo é dividida entre elas.
+      const usual = suggestColorsForModel(prod.id, orders).slice(0, 2).map(u => u.code)
+      const fallback = usual.length > 0
+        ? usual
+        : (prod.color_variants || []).filter(cv => cv.status !== 'discontinued' && cv.code).slice(0, 3).map(cv => cv.code)
+      const total = row.suggestedQty || DEFAULT_QTY
+      if (fallback.length > 0) {
+        const each = Math.max(5, Math.ceil(total / fallback.length / 5) * 5)
+        for (const code of fallback) byColor.push({ code, qty: each, _fromProduct: true })
+      }
+    }
+    setF(prev => ({
+      ...prev,
+      items: [...(prev.items || []), {
+        id: 'tmp-' + uid(),
+        product_id: prod.id,
+        idea_id: null,
+        idea_name_snapshot: null,
+        price_usd: (prod.price_usd != null && prod.price_usd !== '')
+          ? prod.price_usd
+          : (intelByProduct.get(prod.id)?.price?.lastPrice ?? ''),
+        requirements: '',
+        colors: byColor,
+      }],
+    }))
+    setStep(2)
+  }
+
+  // Sinal da loja pra uma cor (só quando a cor tem SKU ligado)
+  const colorRadar = (productId, code) => {
+    const prod = (products || []).find(p => p.id === productId)
+    if (!prod || !shopifyCache) return null
+    return restockForColor(prod, code, {
+      storeIndex: radar.storeIndex, orders, leadDays: leadDaysNow,
+      targetCoverDays: coverTarget, excludeOrderId: order?.id,
+    })
+  }
+
   const toggleColor = (itemId, code, fromProduct) => {
     setF(prev => ({
       ...prev,
@@ -241,9 +323,15 @@ export function OrderCreator({ order = null, prefill = null, factories, products
         const cls = it.colors || []
         const idx = cls.findIndex(c => (c.code || '').toLowerCase() === code.toLowerCase())
         if (idx >= 0) return { ...it, colors: cls.filter((_, i) => i !== idx) }
-        // Quantidade inicial = média histórica dessa combinação, se houver.
+        // Quantidade inicial: primeiro o que a LOJA pede (venda − estoque − o
+        // que já vem); sem sinal de venda, cai na média histórica (v13.75).
+        const store = it.product_id ? colorRadar(it.product_id, code) : null
         const sug = it.product_id ? suggestQuantity(it.product_id, code, orders) : null
-        return { ...it, colors: [...cls, { code, qty: sug?.avg || DEFAULT_QTY, _fromProduct: fromProduct }] }
+        // Com sinal de venda, a loja manda — inclusive quando ela diz "não
+        // precisa" (0): melhor entrar zerado do que repetir 400 peças de um
+        // modelo que já tem 800 a caminho.
+        const initial = (store && store.perDay > 0) ? store.suggestedQty : (sug?.avg || DEFAULT_QTY)
+        return { ...it, colors: [...cls, { code, qty: initial, _fromProduct: fromProduct }] }
       }),
     }))
   }
@@ -530,6 +618,83 @@ export function OrderCreator({ order = null, prefill = null, factories, products
               </div>
             </div>
 
+            {/* v13.75 — RADAR: por onde começar o pedido. Modelos que vendem,
+                estão acabando e não têm reposição suficiente a caminho. */}
+            {!isEdit && radarUrgent.length > 0 && (
+              <div style={{ marginTop: 26, border: '1px solid #FCA5A5', borderRadius: 12, background: '#FFF7F7', padding: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                  <strong style={{ fontSize: 14 }}>📡 Repor primeiro</strong>
+                  <span className="text-muted" style={{ fontSize: 11 }}>
+                    vende na loja, está acabando e o que vem não cobre — base: {radar.coverageDays} dias de venda
+                  </span>
+                  <label className="text-muted" style={{ fontSize: 11, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    cobrir
+                    <select
+                      className="field field-sm"
+                      value={coverTarget}
+                      onChange={e => setCoverTarget(Number(e.target.value))}
+                      style={{ width: 'auto', padding: '2px 6px' }}
+                      aria-label="Quantos dias de venda este pedido deve cobrir"
+                    >
+                      <option value={60}>60 dias</option>
+                      <option value={90}>90 dias</option>
+                      <option value={120}>120 dias</option>
+                      <option value={180}>180 dias</option>
+                    </select>
+                    de estoque
+                  </label>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                  {radarUrgent.slice(0, radarExpanded ? 12 : 5).map(r => {
+                    const already = (f.items || []).some(it => it.product_id === r.product.id)
+                    const photo = r.product.card_image_url || (r.product.photos || [])[0]
+                    const tone = RADAR_TONE[r.status] || RADAR_TONE.ok
+                    return (
+                      <div key={r.product.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10 }}>
+                        <div style={{ width: 34, height: 44, borderRadius: 6, overflow: 'hidden', background: 'var(--bg)', flexShrink: 0 }}>
+                          {photo && <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>
+                            {UC(r.product.name)}
+                            <span style={{ marginLeft: 6, fontSize: 10, background: tone.bg, color: tone.fg, borderRadius: 5, padding: '1px 6px' }}>
+                              {tone.icon} {tone.label}
+                            </span>
+                            {r.product.factory && r.product.factory !== f.factory && (
+                              <span className="text-muted" style={{ marginLeft: 6, fontSize: 10 }}>🏭 {r.product.factory}</span>
+                            )}
+                          </div>
+                          <div className="text-muted" style={{ fontSize: 11 }}>
+                            vende {r.perDay >= 1 ? r.perDay.toFixed(1) : r.perDay.toFixed(2)}/dia · estoque {r.stock}
+                            {r.coverDays != null && ` (${r.coverDays} dias)`}
+                            {r.inFlightQty > 0 ? ` · ${r.inFlightQty} vindo` : ' · nada vindo'}
+                          </div>
+                        </div>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          disabled={already}
+                          onClick={() => addFromRadar(r)}
+                          title={already ? 'Já está neste pedido' : `Adiciona o modelo com ~${r.suggestedQty} peças distribuídas nas cores que vendem`}
+                          style={{ whiteSpace: 'nowrap' }}
+                        >
+                          {already ? '✓ no pedido' : `+ ${r.suggestedQty} pç`}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+                {radarUrgent.length > 5 && (
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setRadarExpanded(v => !v)}
+                    style={{ marginTop: 8 }}
+                  >
+                    {radarExpanded ? 'mostrar menos' : `ver os outros ${radarUrgent.length - 5}`}
+                  </button>
+                )}
+              </div>
+            )}
+
             {!isEdit && reuseCandidates.length > 0 && (
               <div style={{ marginTop: 26 }}>
                 <label className="field-label">Ou reaproveite um pedido recente <span className="text-muted text-xs" style={{ fontWeight: 400 }}>— copia modelos, cores e quantidades pra um rascunho novo</span></label>
@@ -691,6 +856,45 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                         <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
                           {itemQty} pç{itemQty !== 1 ? 's' : ''}{showPrices && itemFob > 0 ? ` · FOB ${fmt$(itemFob)}` : ''}
                         </div>
+                        {/* v13.75 — RADAR: vende / tem / vem, a informação que decide a quantidade */}
+                        {(() => {
+                          const r = it.product_id ? radar.byProduct.get(it.product_id) : null
+                          if (!r || (r.perDay <= 0 && r.stock <= 0 && r.inFlightQty <= 0)) return null
+                          const tone = RADAR_TONE[r.status] || RADAR_TONE.ok
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, fontSize: 11 }}>
+                              <span style={{ background: tone.bg, color: tone.fg, borderRadius: 6, padding: '2px 7px', fontWeight: 700 }}>
+                                {tone.icon} {tone.label}
+                              </span>
+                              {r.perDay > 0 && (
+                                <span className="text-muted" title={`${r.sold} vendidas nos últimos ${radar.coverageDays} dias na loja${r.matchedBy === 'title' ? ' (ligado pelo nome do modelo)' : ''}`}>
+                                  vende <strong>{r.perDay >= 1 ? r.perDay.toFixed(1) : r.perDay.toFixed(2)}</strong>/dia
+                                </span>
+                              )}
+                              <span className="text-muted">·</span>
+                              <span className="text-muted" title="Estoque atual na loja">
+                                estoque <strong>{r.stock}</strong>{r.coverDays != null ? ` (${r.coverDays}d)` : ''}
+                              </span>
+                              {r.inFlightQty > 0 && (
+                                <>
+                                  <span className="text-muted">·</span>
+                                  <span className="text-muted" title={r.inFlightOrders.map(o => `${o.name}: ${o.qty} pç`).join(' · ')}>
+                                    <strong>{r.inFlightQty}</strong> vindo
+                                    {r.daysToNextArrival != null ? ` (chega em ${r.daysToNextArrival}d)` : ''}
+                                  </span>
+                                </>
+                              )}
+                              {r.suggestedQty != null && (
+                                <span
+                                  title={r.explanation}
+                                  style={{ marginLeft: 2, color: r.suggestedQty > 0 ? 'var(--primary)' : 'var(--text-muted, #6b7280)', fontWeight: 700 }}
+                                >
+                                  → pedir ~{r.suggestedQty}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })()}
                         {/* Sinais do histórico: alerta de preço + pedido a caminho */}
                         {intel && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
@@ -873,6 +1077,7 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                       const hasCustom = colorPrice != null && colorPrice !== pu
                       const lineTotal = Number(cl.qty || 0) * (effective || 0)
                       const sug = it.product_id ? suggestQuantity(it.product_id, cl.code, orders) : null
+                      const cr = it.product_id ? colorRadar(it.product_id, cl.code) : null
                       return (
                         <div key={cl.code || idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', borderBottom: '1px solid var(--border-light, var(--border))' }}>
                           {/* Lado a lado: foto do modelo + foto da cor — o "como fica?" */}
@@ -895,15 +1100,39 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                                 </span>
                               )}
                             </div>
-                            {sug && sug.avg !== Number(cl.qty || 0) && (
+                            {/* v13.75 — esta COR na loja: estoque, venda e o que já vem */}
+                            {cr && (
+                              <div style={{ fontSize: 10, color: cr.stock === 0 && cr.perDay > 0 ? '#DC2626' : 'var(--text-muted, #6b7280)', marginTop: 2 }}>
+                                🏬 estoque {cr.stock}
+                                {cr.perDay > 0 && ` · vende ${cr.perDay >= 1 ? cr.perDay.toFixed(1) : cr.perDay.toFixed(2)}/dia`}
+                                {cr.coverDays != null && ` · dura ${cr.coverDays}d`}
+                                {cr.inFlightQty > 0 && ` · ${cr.inFlightQty} vindo`}
+                              </div>
+                            )}
+                            {/* Entrou zerada porque a loja não pede reposição: explica o porquê */}
+                            {cr && cr.suggestedQty === 0 && Number(cl.qty || 0) === 0 && (
+                              <div style={{ fontSize: 10, color: '#166534', marginTop: 2 }}>
+                                ✓ não precisa repor agora{cr.inFlightQty > 0 ? ` — ${cr.inFlightQty} já vindo` : ` — estoque cobre ${cr.coverDays}d`}
+                              </div>
+                            )}
+                            {/* Sugestão: a da loja manda; sem venda registrada, a do histórico */}
+                            {cr && cr.suggestedQty != null && cr.suggestedQty !== Number(cl.qty || 0) ? (
+                              <button
+                                onClick={() => updColor(it.id, idx, 'qty', cr.suggestedQty)}
+                                style={{ background: 'none', border: 'none', padding: 0, marginTop: 2, cursor: 'pointer', fontSize: 10, color: 'var(--primary)', fontWeight: 700 }}
+                                title={`Venda ${cr.perDay.toFixed(2)}/dia × (${leadDaysNow}d de fábrica + ${coverTarget}d de estoque) − ${cr.stock} em estoque${cr.inFlightQty ? ` − ${cr.inFlightQty} já vindo` : ''}`}
+                              >
+                                ↩ usar sugerido pela loja: {cr.suggestedQty}
+                              </button>
+                            ) : (!cr && sug && sug.avg !== Number(cl.qty || 0) && (
                               <button
                                 onClick={() => updColor(it.id, idx, 'qty', sug.avg)}
                                 style={{ background: 'none', border: 'none', padding: 0, marginTop: 2, cursor: 'pointer', fontSize: 10, color: 'var(--primary)' }}
                                 title={`Média de ${sug.count} pedido(s) anteriores desta combinação`}
                               >
-                                ↩ usar sugerido: {sug.avg}
+                                ↩ usar sugerido: {sug.avg} (média do que você já pediu)
                               </button>
-                            )}
+                            ))}
                           </div>
                           {/* Preço com cara de dinheiro: $ …… /un (herda do modelo se vazio) */}
                           {showPrices && (
@@ -1015,6 +1244,41 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                 />
               </div>
             </div>
+
+            {/* v13.75 — o que este pedido significa: quando chega e quanto dura */}
+            {(() => {
+              const start = parseDateLocal(f.order_date) || new Date()
+              const eta = new Date(start.getTime() + leadDaysNow * 86400000)
+              const etaIso = `${eta.getFullYear()}-${String(eta.getMonth() + 1).padStart(2, '0')}-${String(eta.getDate()).padStart(2, '0')}`
+              // Cobertura: peças deste pedido ÷ venda/dia dos modelos com sinal de loja
+              let qtyWithSignal = 0, perDaySum = 0
+              for (const it of (f.items || [])) {
+                const r = it.product_id ? radar.byProduct.get(it.product_id) : null
+                if (!r || r.perDay <= 0) continue
+                const q = (it.colors || []).reduce((a2, c) => a2 + Number(c.qty || 0), 0)
+                if (q <= 0) continue   // modelo sem peça não entra na conta
+                qtyWithSignal += q
+                perDaySum += r.perDay
+              }
+              const coverDays = perDaySum > 0 ? Math.round(qtyWithSignal / perDaySum) : null
+              return (
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '10px 12px', background: 'var(--bg)', borderRadius: 10, marginTop: 6, fontSize: 12 }}>
+                  <span title={`Prazo médio da ${f.factory || 'fábrica'}: ${leadDaysNow} dias`}>
+                    ⏳ Se a fábrica levar ~{leadDaysNow} dias, chega por volta de <strong>{formatDate(etaIso, 'full')}</strong>
+                  </span>
+                  {f.expected_arrival !== etaIso && (
+                    <button className="btn btn-outline btn-sm" onClick={() => s('expected_arrival', etaIso)}>
+                      usar como previsão
+                    </button>
+                  )}
+                  {coverDays != null && (
+                    <span style={{ marginLeft: 'auto' }} title="Peças deste pedido ÷ venda por dia dos modelos que a loja registra">
+                      📦 cobre ~<strong>{coverDays} dias</strong> de venda
+                    </span>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Resumo tipo planilha da fábrica */}
             <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginTop: 6 }}>

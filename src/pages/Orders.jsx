@@ -28,7 +28,7 @@ import { log } from '../lib/logger'
 // uid importado de lib/utils (crypto.randomUUID)
 // UC importado de lib/utils (era duplicado aqui)
 
-export default function OrdersPage({ user, perm, rate, initialData = [], initialIdeas = [], onMutate, initialDetailId, onDetailOpened }) {
+export default function OrdersPage({ user, perm, rate, shopifyCache = null, initialData = [], initialIdeas = [], onMutate, initialDetailId, onDetailOpened }) {
   const [orders, setOrders] = useState(initialData)
   const [trashOrders, setTrashOrders] = useState([])
   const [trashLoaded, setTrashLoaded] = useState(false)
@@ -949,6 +949,7 @@ export default function OrdersPage({ user, perm, rate, initialData = [], initial
         perm={perm}
         rate={rate}
         leadTimeByFactory={leadTimeByFactory}
+        shopifyCache={shopifyCache}
         onSave={save}
         onClose={() => setCreator(null)}
       />
