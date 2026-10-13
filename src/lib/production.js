@@ -22,9 +22,35 @@ import { computeFactoryLeadTime, computeOrderDelay } from './pendencias'
 import { parseDateLocal } from './utils'
 
 const PRODUCING = new Set(['sent', 'manufacturing'])
+const DAY = 86400000
+// Quando o pedido ainda não tem previsão de chegada, estimamos pelo fim da
+// fabricação + este frete. É uma estimativa e a tela diz que é.
+export const SHIPPING_DAYS_ESTIMATE = 30
 const norm = (s) => (s || '').toString().trim().toLowerCase()
 
 const isLive = (o) => o && !o.deleted_at && !o.purged_at
+
+// v13.76 — quantos dias até chegar: a previsão quando existe; senão o fim da
+// fabricação (prazo − dias corridos) + frete estimado.
+function etaOf(order, delay, today) {
+  const t = parseDateLocal(order?.expected_arrival)?.getTime()
+  if (t != null) return { etaDays: Math.ceil((t - today) / DAY), etaEstimated: false }
+  if (delay?.deadlineDays != null) {
+    const left = Math.max(0, delay.deadlineDays - delay.daysElapsed)
+    return { etaDays: left + SHIPPING_DAYS_ESTIMATE, etaEstimated: true }
+  }
+  return { etaDays: null, etaEstimated: false }
+}
+
+// Chegada mais próxima de uma lista de pedidos (a que resolve primeiro)
+export function soonestEta(orderInfos = []) {
+  let best = null
+  for (const o of orderInfos) {
+    if (o?.etaDays == null) continue
+    if (!best || o.etaDays < best.etaDays) best = { etaDays: o.etaDays, etaEstimated: o.etaEstimated, orderName: o.name }
+  }
+  return best
+}
 
 function startOfToday(now) {
   const d = new Date(now)
@@ -69,12 +95,13 @@ export function buildProductionView({ products = [], orders = [], colors = [], n
     const delay = computeOrderDelay(o, lead, now)
     const orderInfo = {
       id: o.id,
-      name: o.order_name || o.factory,
+      name: o.order_name || `${o.factory} (sem nome)`,
       status: o.status,
       factory: o.factory,
       expectedArrival: o.expected_arrival || null,
       isLate: !!delay?.isLate,
       daysLate: delay?.daysLate || 0,
+      ...etaOf(o, delay, today),
     }
     const factoryName = (o.factory || '').trim() || '— sem fábrica —'
 

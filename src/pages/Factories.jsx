@@ -209,7 +209,7 @@ function FactoryDetailModal({ factory, products, orders, onClose }) {
                       <span className="pcard-badge" style={{ background: st?.color }}>{st?.icon}</span>
                     </div>
                     <div style={{ padding: '10px 12px' }}>
-                      <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 700, fontSize: 14, color: 'var(--primary)' }}>{UC(p.name)}</div>
+                      <div style={{ fontFamily: "var(--font-ui)", fontWeight: 700, fontSize: 14, color: 'var(--primary)' }}>{UC(p.name)}</div>
                       <div className="text-muted text-xs">{p.collection || '—'}</div>
                       <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                         {isMain ? <span className="tag" style={{ background: '#EEF2FF', color: '#4338CA' }}>Principal</span>

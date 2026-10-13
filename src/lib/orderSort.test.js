@@ -1,7 +1,7 @@
 // src/lib/orderSort.test.js
 // v13.72 — ordem/agrupamento da lista de pedidos e nome sugerido.
 import { describe, it, expect } from 'vitest'
-import { classifyOrder, groupOrders, sortOrders } from './orderSort'
+import { classifyOrder, groupOrdersByStage, sortOrders, buildAttention } from './orderSort'
 import { proposeOrderName, monthTag } from './orderNaming'
 
 const DAY = 86400000
@@ -68,38 +68,49 @@ describe('classifyOrder', () => {
   })
 })
 
-describe('groupOrders', () => {
-  it('separa em 3 grupos e nunca deixa concluído no meio do caminho', () => {
+describe('groupOrdersByStage (v13.76)', () => {
+  // Cada status no seu bloco, na ordem do ciclo — revisão nunca mais junto
+  // de fabricação/trânsito (reclamação de 13/10/2026)
+  it('um bloco por etapa, na ordem do ciclo de vida', () => {
     const orders = [
       order({ id: 'conc', status: 'completed', settled_at: iso(NOW) }),
       order({ id: 'fab', settled_at: iso(NOW) }),
+      order({ id: 'rev', status: 'sent', settled_at: iso(NOW) }),
+      order({ id: 'nav', status: 'in_transit', settled_at: iso(NOW) }),
+    ]
+    const { stages } = groupOrdersByStage(orders, ctx)
+    expect(stages.map(s => s.id)).toEqual(['draft', 'sent', 'manufacturing', 'in_transit', 'completed'])
+    const ids = Object.fromEntries(stages.map(s => [s.id, s.orders.map(o => o.id)]))
+    expect(ids).toEqual({ draft: [], sent: ['rev'], manufacturing: ['fab'], in_transit: ['nav'], completed: ['conc'] })
+  })
+
+  it('o que precisa de atenção sobe DENTRO da própria etapa', () => {
+    const orders = [
+      order({ id: 'ok', promised_lead_days: 300, settled_at: iso(NOW) }),
       order({ id: 'atrasado', order_date: iso(NOW - 200 * DAY), promised_lead_days: 90, settled_at: iso(NOW) }),
     ]
-    const gs = groupOrders(orders, ctx)
-    expect(gs.map(g => g.id)).toEqual(['attention', 'active', 'closed'])
-    expect(gs[0].orders.map(o => o.id)).toEqual(['atrasado'])
-    expect(gs[1].orders.map(o => o.id)).toEqual(['fab'])
-    expect(gs[2].orders.map(o => o.id)).toEqual(['conc'])
+    const { stages, reasonsById, attentionTotal } = groupOrdersByStage(orders, ctx)
+    const fab = stages.find(s => s.id === 'manufacturing')
+    expect(fab.orders.map(o => o.id)).toEqual(['atrasado', 'ok'])
+    expect(fab.attentionCount).toBe(1)
+    expect(attentionTotal).toBe(1)
+    expect(reasonsById.get('atrasado').map(r => r.id)).toContain('late')
   })
 
-  it('omite grupos vazios', () => {
-    const gs = groupOrders([order({ settled_at: iso(NOW) })], ctx)
-    expect(gs.map(g => g.id)).toEqual(['active'])
-  })
-
-  it('em andamento: trânsito antes de fabricação, e prazo mais apertado antes', () => {
+  it('trânsito: chega antes, aparece antes', () => {
     const orders = [
-      order({ id: 'folgado', promised_lead_days: 300, settled_at: iso(NOW) }),
-      order({ id: 'apertado', promised_lead_days: 12, settled_at: iso(NOW) }),
-      order({ id: 'chegando', status: 'in_transit', expected_arrival: iso(NOW + 5 * DAY), settled_at: iso(NOW) }),
+      order({ id: 'depois', status: 'in_transit', expected_arrival: iso(NOW + 40 * DAY), settled_at: iso(NOW) }),
+      order({ id: 'antes', status: 'in_transit', expected_arrival: iso(NOW + 5 * DAY), settled_at: iso(NOW) }),
     ]
-    const [g] = groupOrders(orders, ctx)
-    expect(g.orders.map(o => o.id)).toEqual(['chegando', 'apertado', 'folgado'])
+    const nav = groupOrdersByStage(orders, ctx).stages.find(s => s.id === 'in_transit')
+    expect(nav.orders.map(o => o.id)).toEqual(['antes', 'depois'])
   })
 
-  it('expõe os motivos por id do pedido', () => {
-    const gs = groupOrders([order({ id: 'x', status: 'completed' })], ctx)
-    expect(gs[0].reasonsById.get('x').map(r => r.id)).toContain('open_debt_completed')
+  it('totais do bloco: peças e quanto falta pagar', () => {
+    const orders = [order({ id: 'a' }), order({ id: 'b', settled_at: iso(NOW) })]
+    const fab = groupOrdersByStage(orders, ctx).stages.find(s => s.id === 'manufacturing')
+    expect(fab.pieces).toBe(20)
+    expect(fab.remainingUsd).toBe(1000)   // só o 'a' (o 'b' foi quitado)
   })
 })
 
@@ -148,5 +159,52 @@ describe('proposeOrderName', () => {
   it('monthTag lê data "só dia" no fuso local', () => {
     expect(monthTag('2026-01-01')).toBe('JAN/26')
     expect(monthTag('2026-03-01')).toBe('MAR/26')
+  })
+})
+
+describe('buildAttention (v13.76)', () => {
+  it('chegada vencida em trânsito: alta prioridade, com "chegou" e "mudar previsão"', () => {
+    const o = order({ id: 'nov', status: 'in_transit', expected_arrival: iso(NOW - 146 * DAY), settled_at: iso(NOW) })
+    const [a] = buildAttention([o], ctx)
+    expect(a.kind).toBe('arrival_overdue')
+    expect(a.severity).toBe('high')
+    expect(a.actions).toEqual(['arrived', 'arrival'])
+    expect(a.title).toMatch(/146 dias/)
+  })
+
+  it('em trânsito sem previsão pede uma', () => {
+    const [a] = buildAttention([order({ status: 'in_transit', settled_at: iso(NOW) })], ctx)
+    expect(a.kind).toBe('arrival_missing')
+    expect(a.actions).toEqual(['arrival'])
+  })
+
+  it('em fabricação sem data de início avisa que o atraso não é calculado', () => {
+    const o = order({ order_date: null, manufacturing_started_at: null, settled_at: iso(NOW) })
+    expect(buildAttention([o], ctx).map(a => a.kind)).toContain('no_start')
+  })
+
+  it('em revisão há muito tempo', () => {
+    const o = order({ status: 'sent', status_history: [{ status: 'sent', at: new Date(NOW - 87 * DAY).toISOString() }], settled_at: iso(NOW) })
+    const [a] = buildAttention([o], ctx)
+    expect(a.kind).toBe('review_stale')
+    expect(a.title).toMatch(/87 dias/)
+  })
+
+  it('peças sem preço, e nunca em pedido quitado à mão', () => {
+    const semPreco = order({ items: [{ id: 'x', colors: [{ code: '1B', qty: 150 }] }] })
+    expect(buildAttention([semPreco], ctx).map(a => a.kind)).toContain('unpriced')
+    expect(buildAttention([{ ...semPreco, settled_at: iso(NOW) }], ctx).map(a => a.kind)).not.toContain('unpriced')
+  })
+
+  it('o mais grave primeiro', () => {
+    const items = buildAttention([
+      order({ id: 'sp', items: [{ id: 'x', colors: [{ code: '1B', qty: 5 }] }] }),
+      order({ id: 'nav', status: 'in_transit', expected_arrival: iso(NOW - 10 * DAY), settled_at: iso(NOW) }),
+    ], ctx)
+    expect(items[0].kind).toBe('arrival_overdue')
+  })
+
+  it('pedido sem nada errado não aparece', () => {
+    expect(buildAttention([order({ promised_lead_days: 300, settled_at: iso(NOW) })], ctx)).toEqual([])
   })
 })

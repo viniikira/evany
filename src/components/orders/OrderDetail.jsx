@@ -20,10 +20,11 @@ import { trackAction } from '../../lib/analytics'
 import { addLog as writeLog } from '../../lib/data/misc'
 import { ORDER_ST } from '../../lib/constants'
 import { UC, formatDate, parseDateLocal } from '../../lib/utils'
+import { ArrivalEditor } from './ArrivalEditor'
 import { toastError } from '../../lib/errors'
 import { log } from '../../lib/logger'
 
-export function OrderDetail({ order: o, products, colors = [], perm, rate, user, onClose, onEdit, onDelete, onStatus, onRefresh, onRecalcFOB, onDuplicate, zIndex, readOnly = false }) {
+export function OrderDetail({ order: o, products, colors = [], perm, rate, user, onClose, onEdit, onDelete, onStatus, onArrivalSave, onRefresh, onRecalcFOB, onDuplicate, zIndex, readOnly = false }) {
   const st = ORDER_ST.find(s => s.id === o.status)
   const [lb, setLb] = useState(null)
   const toast = useToast()
@@ -307,7 +308,14 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
               {o.factory} · {formatDate(o.order_date || o.created_at, 'full')}
               {o.order_date && <span style={{ marginLeft: 4, fontSize: 10, opacity: .6 }} title="Data do pedido (retroativa)">📅</span>}
             </span>
-            {o.expected_arrival && <span className="chip" style={{ background: '#DBEAFE', color: '#1D4ED8' }}>📅 Chegada: {formatDate(o.expected_arrival, 'full')}</span>}
+            {/* v13.76 — previsão editável aqui mesmo (antes só pelo editor completo) */}
+            {onArrivalSave && !readOnly && o.status !== 'completed' && o.status !== 'cancelled'
+              ? <ArrivalEditor
+                  value={o.expected_arrival || ''}
+                  overdue={!!o.expected_arrival && parseDateLocal(o.expected_arrival) < new Date(new Date().toDateString())}
+                  onSave={onArrivalSave}
+                />
+              : (o.expected_arrival && <span className="chip" style={{ background: '#DBEAFE', color: '#1D4ED8' }}>📅 Chegada: {formatDate(o.expected_arrival, 'full')}</span>)}
             {/* #3 Prazo prometido + indicador de atraso (apenas em fabricação)
                 v13.41 — prefere order_date (retroativa) → fallback manufacturing_started_at */}
             {o.status === 'manufacturing' && o.promised_lead_days && (o.order_date || o.manufacturing_started_at) && (() => {

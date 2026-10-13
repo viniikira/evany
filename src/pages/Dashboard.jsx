@@ -193,7 +193,7 @@ export default function Dashboard({
       }}>
         <div>
           <div style={{
-            fontFamily: "'Fraunces', serif",
+            fontFamily: "var(--font-ui)",
             fontSize: 20, fontWeight: 600, color: 'var(--primary)',
             lineHeight: 1.1,
           }}>
@@ -640,7 +640,7 @@ function FavoritesStrip({ items, setPage }) {
               </div>
             </div>
             <div style={{
-              fontFamily: "'Fraunces', serif",
+              fontFamily: "var(--font-ui)",
               fontSize: 13,
               fontWeight: 500,
               color: 'var(--text)',

@@ -1,13 +1,13 @@
 // src/pages/Orders.jsx
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Modal, useConfirm, useToast, SkeletonList, ClearFiltersButton } from '../components/ui'
+import { Modal, useConfirm, useToast, SkeletonList } from '../components/ui'
 import { LeadTimePromptModal } from '../components/orders/LeadTimePromptModal'
 import { CompletionSummaryModal } from '../components/orders/CompletionSummaryModal'
 import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
-import { OrderCard } from '../components/orders/OrderCard'
-import { groupOrders, sortOrders, SORT_MODES } from '../lib/orderSort'
+import { OrdersBoard } from '../components/orders/OrdersBoard'
+import { sortOrders, SORT_MODES } from '../lib/orderSort'
 import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { OrderCreator } from '../components/orders/OrderCreator'
 import {
@@ -19,7 +19,7 @@ import { listProducts, bulkUpdateColorStatus, updateProductStatus } from '../lib
 import { listFactories, listColors, addLog as writeLog } from '../lib/data/misc'
 import { trackAction } from '../lib/analytics'
 import { ORDER_ST } from '../lib/constants'
-import { useStickyFilter, clearStickyFilters } from '../lib/hooks'
+import { useStickyFilter } from '../lib/hooks'
 import { computeFactoryLeadTime } from '../lib/pendencias'
 import { uid, formatDate, UC } from '../lib/utils'
 import { toastError } from '../lib/errors'
@@ -137,7 +137,6 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   // v13.72 — a lista vinha por created_at (data de DIGITAÇÃO), o que embaralhava
   // pedidos retroativos. Agora: grupos de urgência no modo inteligente.
   const sortCtx = { rate, leadTimeByFactory }
-  const groups = sortMode === 'smart' && !isViewingTrash ? groupOrders(filtered, sortCtx) : []
   const sortedFlat = sortMode === 'smart' ? filtered : sortOrders(filtered, sortMode, sortCtx)
 
   const save = async (order) => {
@@ -565,6 +564,23 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   }
 
   // Mudança de status com diálogo de cores
+  // v13.76 — previsão de chegada editável direto no card / detalhe
+  const updateArrival = async (o, date) => {
+    try {
+      await updateOrder(o.id, { expected_arrival: date || null })
+      writeLog({
+        userId: user.id, userName: user.name,
+        action: 'atualizou previsão de chegada',
+        target: o.order_name || o.factory,
+        details: `${o.expected_arrival ? formatDate(o.expected_arrival, 'full') : 'sem previsão'} → ${date ? formatDate(date, 'full') : 'sem previsão'}`,
+        entityType: 'order', entityId: o.id,
+      })
+      toast.push(date ? `Previsão: ${formatDate(date, 'full')}` : 'Previsão removida', { kind: 'success' })
+      await load(); onMutate?.()
+      return true
+    } catch (e) { toastError(toast, e); return false }
+  }
+
   const changeStatus = async (o, newStatus, extraData = {}) => {
     const oldStatus = o.status
     if (oldStatus === newStatus) return
@@ -786,37 +802,34 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   if (loading) return <SkeletonList rows={5} />
 
   return <div>
-    <div className="toolbar">
-      <div className="chip-bar" style={{ margin: 0, flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-        <button className={`chip-filter${filter === 'all' ? ' on' : ''}`} onClick={() => setFilter('all')}>Todos ({orders.length})</button>
-        {ORDER_ST.map(s => <button key={s.id} className={`chip-filter${filter === s.id ? ' on' : ''}`} onClick={() => setFilter(s.id)}>{s.icon} {s.label}</button>)}
-        {/* Separador visual antes da Lixeira (estilo Gmail Inbox/Lixeira) */}
-        <span style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 4px' }} aria-hidden />
-        <button
-          className={`chip-filter${filter === 'trash' ? ' on' : ''}`}
-          onClick={() => setFilter('trash')}
-          title="Pedidos movidos pra lixeira (recuperáveis por 30 dias)"
-        >
-          🗑️ Lixeira{trashLoaded ? ` (${trashOrders.length})` : ''}
-        </button>
-        <ClearFiltersButton
-          visible={filter !== 'all'}
-          onClear={() => clearStickyFilters('orders')}
-        />
-      </div>
-      {!isViewingTrash && (
-        <select
-          className="field field-sm"
-          value={sortMode}
-          onChange={e => changeSort(e.target.value)}
-          aria-label="Ordem da lista de pedidos"
-          title="Como ordenar a lista"
-          style={{ width: 'auto' }}
-        >
-          {SORT_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
+    {/* v13.76 — barra enxuta: as ETAPAS (dentro da lista) viraram o filtro */}
+    <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
+      {isViewingTrash ? (
+        <button className="ob-btn" onClick={() => setFilter('all')}>← Voltar aos pedidos</button>
+      ) : (
+        <>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-2)' }}>
+            Organizar
+            <select
+              className="field field-sm"
+              value={sortMode}
+              onChange={e => changeSort(e.target.value)}
+              aria-label="Como organizar a lista de pedidos"
+              style={{ width: 'auto' }}
+            >
+              {SORT_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          </label>
+          <button
+            className="ob-btn"
+            onClick={() => setFilter('trash')}
+            title="Pedidos movidos pra lixeira (recuperáveis por 30 dias)"
+          >
+            Lixeira{trashLoaded ? ` (${trashOrders.length})` : ''}
+          </button>
+          <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo pedido</button>
+        </>
       )}
-      {!isViewingTrash && <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo Pedido</button>}
     </div>
 
     {/* Banner informativo quando vendo lixeira */}
@@ -830,18 +843,14 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
       </div>
     )}
 
-    {filtered.length === 0 ? (
-      isViewingTrash ? (
+    {isViewingTrash ? (
+      filtered.length === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">🗑️</div>
           <p>Lixeira vazia.</p>
           <p className="text-muted text-sm">Pedidos excluídos aparecem aqui e podem ser restaurados em até 30 dias.</p>
         </div>
       ) : (
-        <div className="empty-state"><div className="empty-icon">📋</div><p>Nenhum pedido.</p></div>
-      )
-    )
-    : isViewingTrash ? (
       // Render especial pra cards de pedidos da lixeira (com restore/purge)
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {filtered.map(o => {
@@ -897,45 +906,26 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
           )
         })}
       </div>
-    )
-    : sortMode === 'smart' ? (
-      // v13.72 — agrupado por urgência: concluído nunca mais no meio do caminho
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {groups.map(g => (
-          <div key={g.id}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-              <h3 style={{ margin: 0, fontSize: 14, letterSpacing: .3 }}>{g.label} ({g.orders.length})</h3>
-              {g.hint && <span className="text-muted" style={{ fontSize: 11.5 }}>{g.hint}</span>}
-            </div>
-            <div className="grid-2">
-              {g.orders.map(o => (
-                <OrderCard
-                  key={o.id}
-                  order={o}
-                  products={products}
-                  perm={perm}
-                  rate={rate}
-                  leadTimeByFactory={leadTimeByFactory}
-                  reasons={g.reasonsById.get(o.id)}
-                  onClick={() => setDetail(o)}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    )
-    : <div className="grid-2">{sortedFlat.map(o => (
-      <OrderCard
-        key={o.id}
-        order={o}
+      )
+    ) : orders.length === 0 ? (
+      <div className="empty-state"><div className="empty-icon">📋</div><p>Nenhum pedido ainda.</p></div>
+    ) : (
+      // v13.76 — lista redesenhada: etapas + "precisa de você" + tabela por etapa
+      <OrdersBoard
+        orders={orders}
         products={products}
         perm={perm}
         rate={rate}
         leadTimeByFactory={leadTimeByFactory}
-        onClick={() => setDetail(o)}
+        mode={sortMode === 'smart' ? 'stage' : 'flat'}
+        flatOrders={sortedFlat}
+        stageFilter={filter}
+        onStageFilter={setFilter}
+        onOpen={(o) => setDetail(o)}
+        onArrivalSave={perm.orders ? updateArrival : undefined}
+        onMarkArrived={perm.orders ? (o) => changeStatus(o, 'completed') : undefined}
       />
-    ))}</div>}
+    )}
 
     {creator && (
       <OrderCreator
@@ -966,6 +956,7 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         onEdit={() => { setCreator({ order: detail }); setDetail(null) }}
         onDelete={() => remove(detail)}
         onStatus={s => changeStatus(detail, s)}
+        onArrivalSave={perm.orders ? async (d) => { const ok = await updateArrival(detail, d); if (ok) setDetail(prev => prev ? { ...prev, expected_arrival: d || null } : prev); return ok } : undefined}
         onRefresh={load}
         onRecalcFOB={() => handleRecalcFOB(detail)}
         onDuplicate={() => handleDuplicate(detail)}

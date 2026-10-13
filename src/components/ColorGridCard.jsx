@@ -103,7 +103,7 @@ export function ColorGridCard({
           {code}
         </div>
         <div style={{
-          fontFamily: "'Fraunces',serif",
+          fontFamily: "var(--font-ui)",
           fontSize: 13, fontWeight: 600,
           color: 'var(--text)',
           marginTop: 5,

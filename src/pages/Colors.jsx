@@ -835,7 +835,7 @@ function ColorProductsModal({ color, products, onClose }) {
             {color.photo_url && <img src={color.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
           </div>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "'Fraunces',serif", color: 'var(--primary)' }}>{color.code}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "var(--font-ui)", color: 'var(--primary)' }}>{color.code}</div>
             {color.name_pt && <div style={{ fontSize: 13, color: '#6B7280', fontStyle: 'italic' }}>{color.name_pt}</div>}
             <div className="text-muted text-sm" style={{ marginTop: 2 }}>{products.length} produto{products.length !== 1 ? 's' : ''} usando esta cor</div>
             {(color.factories || []).length > 0 && (
@@ -865,7 +865,7 @@ function ColorProductsModal({ color, products, onClose }) {
                     : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: 30, opacity: .3 }}>👑</div>}
                 </div>
                 <div style={{ padding: '10px 12px' }}>
-                  <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 700, fontSize: 14, color: 'var(--primary)', lineHeight: 1.2 }}>
+                  <div style={{ fontFamily: "var(--font-ui)", fontWeight: 700, fontSize: 14, color: 'var(--primary)', lineHeight: 1.2 }}>
                     {UC(p.name)}
                   </div>
                   {p.factory && (

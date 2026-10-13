@@ -1,0 +1,142 @@
+/* ═══════════════════════════════════════════════════════════════════
+   v13.76 — PRODUÇÃO — prefixo pd-
+   Mesmo padrão da lista de pedidos (orders-board.css): Inter, números
+   tabulares, fundo neutro, vermelho só para risco real, texto mínimo 12px.
+   ═══════════════════════════════════════════════════════════════════ */
+.pd { display: flex; flex-direction: column; gap: 20px; font-variant-numeric: tabular-nums; color: var(--text) }
+
+/* ── Números do topo ── */
+.pd-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px }
+.pd-kpi {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+  font: inherit; color: inherit;
+}
+.pd-kpi.clickable { cursor: pointer; transition: border-color .15s }
+.pd-kpi.clickable:hover { border-color: var(--text-muted) }
+.pd-kpi.bad { border-color: #FCA5A5; background: var(--bad-bg) }
+.pd-kpi-label { font-size: 13px; font-weight: 500; color: var(--text-2) }
+.pd-kpi-value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25 }
+.pd-kpi-value small { font-size: 14px; font-weight: 500; color: var(--text-2); letter-spacing: 0 }
+.pd-kpi-sub { font-size: 12px; color: var(--text-2) }
+.pd-kpi.bad .pd-kpi-value, .pd-kpi.bad .pd-kpi-label { color: var(--bad) }
+
+/* ── Controles ── */
+.pd-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.pd-seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 3px }
+.pd-seg button {
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--text-2); background: transparent;
+  border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer; display: flex; gap: 6px; align-items: center;
+}
+.pd-seg button span { font-size: 12px; color: var(--text-muted) }
+.pd-seg button.on { background: var(--primary); color: #fff }
+.pd-seg button.on span { color: rgba(255,255,255,.75) }
+.pd-input {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; outline: none;
+}
+.pd-input:focus { border-color: var(--text-muted) }
+.pd-search { flex: 1; min-width: 200px }
+.pd-note { font-size: 13px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; padding: 9px 14px }
+.pd-empty { padding: 40px; text-align: center; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 12px }
+
+.pd-pill { font-size: 12px; font-weight: 500; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; white-space: nowrap }
+.pd-pill.bad { color: var(--bad); background: var(--bad-bg); border-color: #FCA5A5 }
+
+/* ── Fábrica ── */
+.pd-factory-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 2px 10px }
+.pd-factory-head h3 { font-size: 16px; margin: 0 }
+.pd-factory-meta { font-size: 13px; color: var(--text-2) }
+.pd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px }
+
+/* ── Card do modelo ── */
+.pd-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; display: flex; flex-direction: column; gap: 12px; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.pd-card:hover { border-color: var(--text-muted); box-shadow: var(--shadow) }
+.pd-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px }
+.pd-card.risk { box-shadow: inset 3px 0 0 var(--bad) }
+.pd-card-top { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 12px; align-items: start }
+.pd-photo {
+  width: 56px; height: 74px; border-radius: 8px; overflow: hidden; background: var(--line);
+  border: 0; padding: 0; cursor: zoom-in; display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font: inherit; font-size: 18px; font-weight: 600;
+}
+.pd-photo img { width: 100%; height: 100%; object-fit: cover }
+.pd-photo.sm { width: 40px; height: 52px; font-size: 14px }
+.pd-card-title { display: flex; flex-direction: column; gap: 3px; min-width: 0 }
+.pd-card-title h4 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: 0 }
+.pd-card-sub { font-size: 12px; color: var(--text-2) }
+.pd-orders { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px }
+.pd-order {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--hover);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; cursor: pointer;
+  display: inline-flex; gap: 6px; align-items: center; white-space: nowrap;
+}
+.pd-order em { font-style: normal; color: var(--text-2) }
+.pd-order:hover { border-color: var(--text-muted) }
+.pd-order.late em { color: var(--bad); font-weight: 600 }
+.pd-card-qty { display: flex; flex-direction: column; align-items: flex-end }
+.pd-card-qty strong { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2 }
+.pd-card-qty span { font-size: 12px; color: var(--text-2) }
+
+/* Cores: foto + código inteiro + peças (nada cortado, nada por cima da foto) */
+.pd-colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 10px 8px }
+.pd-color { display: flex; flex-direction: column; align-items: center; gap: 3px; text-align: center; min-width: 0 }
+.pd-swatch {
+  width: 44px; height: 44px; border-radius: 10px; overflow: hidden; display: block;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.06);
+}
+.pd-swatch img { width: 100%; height: 100%; object-fit: cover; display: block }
+.pd-color-code { font-size: 12px; line-height: 1.25; color: var(--text-2); max-width: 100%; overflow-wrap: normal; word-break: normal; hyphens: none }
+.pd-color-qty { font-size: 13px; font-weight: 600 }
+.pd-color.orphan .pd-swatch { opacity: .45; outline: 1px dashed var(--text-muted); outline-offset: 2px }
+.pd-color.orphan .pd-color-qty { font-size: 12px; font-weight: 500; color: var(--warn-ink) }
+
+/* Situação na loja */
+.pd-store {
+  display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 13px; color: var(--text-2);
+  border-top: 1px solid var(--line); padding-top: 10px;
+}
+.pd-store strong { color: var(--text); font-weight: 600 }
+.pd-store-label { font-size: 12px; font-weight: 600; color: var(--text); background: var(--hover); border-radius: 5px; padding: 1px 7px }
+.pd-store.risk .pd-store-label { background: var(--bad-bg); color: var(--bad) }
+.pd-store-risk { width: 100%; color: var(--bad) }
+.pd-store-risk strong { color: var(--bad) }
+.pd-store-warn { width: 100%; color: var(--warn-ink) }
+
+/* ── Em trânsito ── */
+.pd-transit { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden }
+.pd-transit-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px; border-bottom: 1px solid var(--line);
+}
+.pd-transit-name { font: inherit; font-size: 15px; font-weight: 600; color: var(--text); background: none; border: 0; padding: 0; cursor: pointer; display: block }
+.pd-transit-name:hover { text-decoration: underline }
+.pd-transit-meta { font-size: 12px; color: var(--text-2) }
+.pd-transit-models { display: flex; flex-direction: column }
+.pd-transit-row { display: grid; grid-template-columns: 40px 140px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line) }
+.pd-transit-row:first-child { border-top: 0 }
+.pd-transit-model { display: flex; flex-direction: column }
+.pd-transit-model strong { font-size: 14px; font-weight: 600 }
+.pd-transit-model span { font-size: 12px; color: var(--text-2) }
+.pd-chips { display: flex; flex-wrap: wrap; gap: 6px }
+.pd-chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px 2px 3px; background: var(--surface);
+}
+.pd-chip i { width: 20px; height: 20px; border-radius: 50%; overflow: hidden; display: block }
+.pd-chip i img { width: 100%; height: 100%; object-fit: cover; display: block }
+.pd-chip b { color: var(--text); font-weight: 600 }
+
+@media (max-width: 1100px) {
+  .pd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+  .pd-grid { grid-template-columns: 1fr }
+}
+@media (max-width: 640px) {
+  .pd-search { min-width: 0; width: 100% }
+  .pd-transit-row { grid-template-columns: 40px minmax(0, 1fr) }
+  .pd-chips { grid-column: 1 / -1 }
+}

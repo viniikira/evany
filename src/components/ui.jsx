@@ -413,7 +413,7 @@ export function PendenciasDrawer({ open, pendencias, onClose, onPendenciaClick }
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'Fraunces', serif", color: 'var(--primary)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "var(--font-ui)", color: 'var(--primary)' }}>
               🔔 Pendências do Sistema
             </div>
             <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
@@ -574,7 +574,7 @@ export function AtividadeDrawer({ open, logs = [], onClose }) {
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'Fraunces', serif", color: 'var(--primary)' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "var(--font-ui)", color: 'var(--primary)' }}>
               📊 Centro de Atividade
             </div>
             <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>

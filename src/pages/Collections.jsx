@@ -119,7 +119,7 @@ function CollectionProductsModal({ collection, products, onClose }) {
                   <span className="pcard-badge" style={{ background: st?.color }}>{st?.icon}</span>
                 </div>
                 <div style={{ padding: '10px 12px' }}>
-                  <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 700, fontSize: 14, color: 'var(--primary)' }}>{UC(p.name)}</div>
+                  <div style={{ fontFamily: "var(--font-ui)", fontWeight: 700, fontSize: 14, color: 'var(--primary)' }}>{UC(p.name)}</div>
                   <div className="text-muted text-xs" style={{ marginTop: 2 }}>{p.finish_type || '—'}</div>
                   {(p.color_variants || []).length > 0 && <div className="text-muted text-xs" style={{ marginTop: 2 }}>{p.color_variants.length} cor{p.color_variants.length > 1 ? 'es' : ''}</div>}
                 </div>

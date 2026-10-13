@@ -1,34 +1,64 @@
 // src/pages/Producao.jsx
-// v13.43 — Catálogo denso (Fraunces/DM Mono, agrupado por fábrica).
-// v13.61 — MEGA revisão (auditoria de UX): a página virou ESTRATÉGICA:
-//   - PEÇAS em primeiro lugar: total por produto, por cor (pill ×qtd) e por
-//     fábrica — antes não dava pra saber quantas peças estavam em produção
-//   - Pedidos vinculados visíveis em cada produto (chip clicável → abre o
-//     pedido), com chegada prevista e badge de atraso
-//   - KPIs no topo: peças em produção · produtos · cores · peças em trânsito
-//     · próxima chegada
-//   - Cards densos (foto 96px, não mais 160px de arte de marketing)
+// v13.76 — Produção redesenhada (pedido da dona: "fontes feias, cores feias,
+// não está inteligente — faça com calma e mais profissional").
 //
-// Dados:
-//   - Tab "Em Produção": color_variants status 'production' + quantidades dos
-//     pedidos ativos (sent/manufacturing), matching case-insensitive
-//   - Tab "Em Trânsito": pedidos status 'in_transit'
+// O que a página responde, de cima pra baixo:
+//   1. Quanto está sendo fabricado, quanto vem no navio, quando chega o próximo
+//      lote e QUANTOS MODELOS VÃO FALTAR NA LOJA antes do lote chegar.
+//   2. Por fábrica: cada modelo com as cores (foto + código inteiro + peças),
+//      os pedidos dele e a situação na loja — estoque, venda/dia e se o estoque
+//      acaba antes de chegar ("a loja fica ~46 dias sem").
+//
+// Dados: peças vêm dos PEDIDOS (lib/production.js, v13.73); loja vem do cache
+// da Shopify (lib/restock.js, v13.75). Visual: Inter, fundo neutro, uma cor por
+// situação, vermelho só pra risco real. Estilos em styles/producao.css (pd-).
+// O panorama do modelo (clique no card) continua com os estilos prd- abaixo.
 
-import { useState, useMemo, useEffect, useRef } from 'react'
-import { Lightbox, ClearFiltersButton, Modal, MH, MB } from '../components/ui'
-import { listFactories, listCollections } from '../lib/data/misc'
+import { useState, useMemo, useEffect } from 'react'
+import { Lightbox, Modal, MH, MB } from '../components/ui'
+import { listFactories } from '../lib/data/misc'
 import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
 import { priceSignalForModel, suggestColorsForModel } from '../lib/orderIntelligence'
 import { formatDate, UC, parseDateLocal } from '../lib/utils'
-import { buildProductionView } from '../lib/production'
+import { buildProductionView, soonestEta } from '../lib/production'
+import { buildStoreIndex, storeSignalForProduct } from '../lib/restock'
 import { shopifyCoverageDays, coverageLabel } from '../lib/shopifySlim'
+import '../styles/producao.css'
+
+const DAY = 86400000
+const nf = (n) => Math.round(n || 0).toLocaleString('pt-BR')
+const perDayFmt = (v) => (v >= 1 ? v.toFixed(1) : v.toFixed(2)).replace('.', ',')
+// Código de cor quebra só depois da barra ("NTPN4/16A/613"), nunca no meio da palavra
+const Code = ({ code }) => String(code).split('/').map((part, i, arr) => (
+  <span key={i}>{part}{i < arr.length - 1 && <>/<wbr /></>}</span>
+))
+// Estoque que acaba logo e lote sem previsão de chegada: vale um aviso
+const SOON_DAYS = 45
+
+const SORTS = [
+  { id: 'risk', label: 'Risco de faltar na loja' },
+  { id: 'pieces', label: 'Mais peças' },
+  { id: 'arrival', label: 'Chega primeiro' },
+  { id: 'alpha', label: 'A–Z' },
+]
+
+// Situação na loja de um modelo, comparada com quando o lote chega
+function storeOutlook(store, eta) {
+  if (!store || store.matchedBy == null) return null
+  const coverDays = store.perDay > 0 ? Math.floor(store.stock / store.perDay) : null
+  let gapDays = null
+  if (coverDays != null && eta?.etaDays != null) {
+    const g = eta.etaDays - coverDays
+    gapDays = g > 0 ? g : 0
+  }
+  return { ...store, coverDays, gapDays }
+}
 
 export default function ProducaoPage({
   products = [],
   orders = [],
   colors = [],
   factories: factoriesProp,
-  collections: collectionsProp,
   perm = {},
   shopifyCache = null,
   onOpenOrder,
@@ -36,296 +66,207 @@ export default function ProducaoPage({
   const [tab, setTab] = useState('production')
   const [search, setSearch] = useState('')
   const [factoryFilter, setFactoryFilter] = useState('')
-  const [collectionFilter, setCollectionFilter] = useState('')
-  const [showOnlyStuck, setShowOnlyStuck] = useState(false)
-  const [sortBy, setSortBy] = useState('pieces')
+  const [sortBy, setSortBy] = useState('risk')
   const [lb, setLb] = useState(null)
-  // v13.64 — panorama inteligente do produto (clique no card)
   const [panoramaId, setPanoramaId] = useState(null)
-
   const [factories, setFactories] = useState(factoriesProp || [])
-  const [collections, setCollections] = useState(collectionsProp || [])
 
   useEffect(() => {
     if (!factoriesProp) listFactories().then(setFactories).catch(() => setFactories([]))
-    if (!collectionsProp) listCollections().then(setCollections).catch(() => setCollections([]))
-  }, [factoriesProp, collectionsProp])
+  }, [factoriesProp])
 
-  // ═════════ PRODUÇÃO: derivada dos PEDIDOS (v13.73) ═════════
-  // Antes vinha da etiqueta "em produção" do cadastro — escondia 1.385 peças e
-  // dava alarme falso pro que já estava no navio. Ver src/lib/production.js.
-  const view = useMemo(
-    () => buildProductionView({ products, orders, colors }),
-    [products, orders, colors]
-  )
-  const productionGroups = view.groups
+  // ═════════ DADOS ═════════
+  const view = useMemo(() => buildProductionView({ products, orders, colors }), [products, orders, colors])
+  const storeIndex = useMemo(() => buildStoreIndex(shopifyCache), [shopifyCache])
+  const hasStore = !!shopifyCache && storeIndex.coverageDays > 0
 
-  // ═════════ TRANSIT ═════════
-  const transitByOrder = useMemo(() => {
-    const list = []
-    for (const o of orders) {
-      if (o.status !== 'in_transit') continue
-      const byProduct = new Map()
-      for (const it of (o.items || [])) {
-        const prod = products.find(p => p.id === it.product_id)
-        const key = it.product_id || `manual-${it.name_manual || 'sem-nome'}`
-        const prodObj = prod || { id: key, name: it.name_manual || it.product_name_snapshot || 'Sem nome', factory: o.factory }
-        if (!byProduct.has(key)) byProduct.set(key, { product: prodObj, cores: [] })
-        for (const cl of (it.colors || [])) {
-          if (!cl.code) continue
-          byProduct.get(key).cores.push({
-            code: cl.code,
-            qty: Number(cl.qty) || 0,
-            colorData: colors.find(c => c.code === cl.code),
-            sku: prod?.color_variants?.find(cv => cv.code === cl.code)?.sku,
-          })
+  // Cada card (fábrica × modelo) com a chegada mais próxima e a situação na loja
+  const groups = useMemo(() => view.groups.map(g => {
+    const eta = soonestEta(g.orders)
+    const outlook = hasStore ? storeOutlook(storeSignalForProduct(g.product, storeIndex, products), eta) : null
+    return { ...g, eta, outlook, outlookChecked: hasStore }
+  }), [view, storeIndex, products, hasStore])
+
+  // Modelos que vão faltar na loja antes do lote chegar (por modelo, não por card)
+  const atRisk = useMemo(() => {
+    const ids = new Set()
+    for (const g of groups) if (g.outlook?.gapDays > 0) ids.add(g.product.id)
+    return ids
+  }, [groups])
+
+  const transit = useMemo(() => orders
+    .filter(o => !o.deleted_at && o.status === 'in_transit')
+    .map(o => {
+      const t = parseDateLocal(o.expected_arrival)?.getTime()
+      const days = t != null ? Math.round((t - new Date(new Date().toDateString()).getTime()) / DAY) : null
+      const models = (o.items || []).map(it => {
+        const p = products.find(x => x.id === it.product_id)
+        return {
+          key: it.id || it.product_id,
+          product: p || { name: it.product_name_snapshot || it.name_manual || 'Sem nome' },
+          cores: (it.colors || []).filter(c => c.code && Number(c.qty) > 0).map(c => ({
+            code: c.code, qty: Number(c.qty) || 0,
+            colorData: colors.find(x => (x.code || '').toLowerCase() === c.code.toLowerCase()),
+          })),
         }
-      }
-      list.push({
-        order: o,
-        orderDate: o.order_date || o.created_at,
-        expectedArrival: o.expected_arrival,
-        products: [...byProduct.values()].sort((a, b) => (a.product.name || '').localeCompare(b.product.name || '')),
-      })
-    }
-    return list.sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0))
-  }, [orders, products, colors])
+      }).filter(m => m.cores.length > 0)
+      const pieces = models.reduce((a, m) => a + m.cores.reduce((b, c) => b + c.qty, 0), 0)
+      return { order: o, days, models, pieces }
+    })
+    .sort((a, b) => (a.days ?? 1e9) - (b.days ?? 1e9)), [orders, products, colors])
+  const transitPieces = transit.reduce((a, t) => a + t.pieces, 0)
 
-  // ═════════ FILTROS + ORDENAÇÃO ═════════
-  const productionByFactory = useMemo(() => {
+  // ═════════ FILTRO + ORDEM ═════════
+  const byFactory = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const filtered = productionGroups
-      .map(g => ({
-        ...g,
-        cores: g.cores.filter(c => {
-          if (showOnlyStuck && c.hasOrder) return false
-          if (q) {
-            const hit = (c.code || '').toLowerCase().includes(q) ||
-                        (g.product.name || '').toLowerCase().includes(q) ||
-                        (c.colorData?.name_pt || '').toLowerCase().includes(q)
-            if (!hit) return false
-          }
-          return true
-        }),
-      }))
-      .filter(g => g.cores.length > 0)
-      .filter(g => {
-        if (factoryFilter && g.factoryName !== factoryFilter) return false
-        if (collectionFilter && g.product.collection !== collectionFilter) return false
-        return true
-      })
-      .map(g => ({ ...g, totalQty: g.cores.reduce((s, c) => s + c.qty, 0), reviewQty: g.cores.reduce((s, c) => s + (c.qtyReview || 0), 0) }))
-
-    const sortFn = {
-      pieces: (a, b) => b.totalQty - a.totalQty || (a.product.name || '').localeCompare(b.product.name || ''),
-      urgency: (a, b) => {
-        const aStuck = a.cores.filter(c => !c.hasOrder).length
-        const bStuck = b.cores.filter(c => !c.hasOrder).length
-        if (aStuck !== bStuck) return bStuck - aStuck
-        return (a.product.name || '').localeCompare(b.product.name || '')
-      },
+    const list = groups
+      .filter(g => !factoryFilter || g.factoryName === factoryFilter)
+      .filter(g => !q
+        || (g.product.name || '').toLowerCase().includes(q)
+        || g.cores.some(c => (c.code || '').toLowerCase().includes(q))
+        || g.orders.some(o => (o.name || '').toLowerCase().includes(q)))
+    const sorters = {
+      risk: (a, b) => (b.outlook?.gapDays || 0) - (a.outlook?.gapDays || 0) || b.totalQty - a.totalQty,
+      pieces: (a, b) => b.totalQty - a.totalQty,
+      arrival: (a, b) => (a.eta?.etaDays ?? 1e9) - (b.eta?.etaDays ?? 1e9) || b.totalQty - a.totalQty,
       alpha: (a, b) => (a.product.name || '').localeCompare(b.product.name || ''),
-      count: (a, b) => b.cores.length - a.cores.length,
-      recent: (a, b) => new Date(b.product.updated_at || 0) - new Date(a.product.updated_at || 0),
-    }[sortBy] || (() => 0)
-    filtered.sort(sortFn)
-
-    const byFactory = new Map()
-    for (const g of filtered) {
-      const f = g.factoryName
-      if (!byFactory.has(f)) byFactory.set(f, [])
-      byFactory.get(f).push(g)
     }
-    return [...byFactory.entries()].map(([factoryName, groups]) => ({
-      factoryName,
-      groups,
-      totalCores: groups.reduce((s, g) => s + g.cores.length, 0),
-      totalQty: groups.reduce((s, g) => s + g.totalQty, 0),
-      reviewQty: groups.reduce((s, g) => s + (g.reviewQty || 0), 0),
-      stuckCores: groups.reduce((s, g) => s + g.cores.filter(c => !c.hasOrder).length, 0),
-    }))
-      // v13.73 — fábrica com mais peças primeiro (antes: ordem de chegada dos dados)
-      .sort((a, b) => b.totalQty - a.totalQty || a.factoryName.localeCompare(b.factoryName))
-  }, [productionGroups, search, factoryFilter, collectionFilter, showOnlyStuck, sortBy])
+    list.sort(sorters[sortBy] || sorters.risk)
+    const m = new Map()
+    for (const g of list) {
+      if (!m.has(g.factoryName)) m.set(g.factoryName, [])
+      m.get(g.factoryName).push(g)
+    }
+    return [...m.entries()].map(([name, gs]) => ({
+      name,
+      groups: gs,
+      pieces: gs.reduce((a, g) => a + g.totalQty, 0),
+      review: gs.reduce((a, g) => a + (g.reviewQty || 0), 0),
+      risk: gs.filter(g => g.outlook?.gapDays > 0).length,
+      eta: soonestEta(gs.flatMap(g => g.orders)),
+    })).sort((a, b) => b.pieces - a.pieces)
+  }, [groups, search, factoryFilter, sortBy])
 
-  const filteredTransitByOrder = useMemo(() => {
+  const transitShown = transit.filter(t => {
+    if (factoryFilter && t.order.factory !== factoryFilter) return false
     const q = search.trim().toLowerCase()
-    return transitByOrder
-      .map(t => ({
-        ...t,
-        products: t.products.map(p => ({
-          ...p,
-          cores: p.cores.filter(c => {
-            if (!q) return true
-            return (c.code || '').toLowerCase().includes(q) ||
-                   (p.product.name || '').toLowerCase().includes(q) ||
-                   (t.order.order_name || '').toLowerCase().includes(q) ||
-                   (c.colorData?.name_pt || '').toLowerCase().includes(q)
-          }),
-        })).filter(p => p.cores.length > 0),
-      }))
-      .filter(t => t.products.length > 0)
-      .filter(t => !factoryFilter || t.order.factory === factoryFilter)
-  }, [transitByOrder, search, factoryFilter])
+    return !q || (t.order.order_name || '').toLowerCase().includes(q)
+      || t.models.some(m => (m.product.name || '').toLowerCase().includes(q))
+  })
 
-  // ═════════ KPIs ═════════
-  const totalPiecesProduction = view.kpis.totalQty
-  const transitPieces = transitByOrder.reduce((s, t) =>
-    s + t.products.reduce((s2, p) => s2 + p.cores.reduce((s3, c) => s3 + (c.qty || 0), 0), 0), 0)
-
-  const hasFilters = !!(search || factoryFilter || collectionFilter || showOnlyStuck)
-  const clearFilters = () => {
-    setSearch(''); setFactoryFilter(''); setCollectionFilter(''); setShowOnlyStuck(false)
-  }
+  const k = view.kpis
+  const overdue = view.overdueArrivals[0]
+  const next = view.nextArrival
 
   return (
-    <div className="producao-page">
+    <div className="pd">
       <style>{PRODUCAO_STYLES}</style>
       {lb && <Lightbox src={lb} onClose={() => setLb(null)} />}
 
-      {/* ═════════ HEADER + KPIs ═════════ */}
-      <div className="prd-header-compact">
-        <div className="prd-header-left">
-          <h1 className="prd-title-compact">Produç<em>ão</em></h1>
+      {/* ═════════ 1. Números que importam ═════════ */}
+      <div className="pd-kpis">
+        <div className="pd-kpi">
+          <span className="pd-kpi-label">Sendo fabricado</span>
+          <span className="pd-kpi-value">{nf(k.manufacturingQty)} <small>peças</small></span>
+          <span className="pd-kpi-sub">{k.reviewQty > 0 ? `+ ${nf(k.reviewQty)} em revisão` : `${k.products} modelos`}</span>
         </div>
-        <div className="prd-kpis">
-          <div className="prd-kpi" title="Somado das linhas dos pedidos em revisão e em fabricação">
-            <div className="prd-kpi-val">{totalPiecesProduction.toLocaleString('pt-BR')}</div>
-            <div className="prd-kpi-lbl">
-              peças em produção
-              {view.kpis.reviewQty > 0 && <> · {view.kpis.reviewQty.toLocaleString('pt-BR')} em revisão</>}
-            </div>
-          </div>
-          <div className="prd-kpi">
-            <div className="prd-kpi-val">{view.kpis.products}</div>
-            <div className="prd-kpi-lbl">produtos</div>
-          </div>
-          <div className="prd-kpi">
-            <div className="prd-kpi-val">
-              {view.kpis.colors}
-              {view.kpis.orphanCount > 0 && (
-                <span className="prd-kpi-warn" title="Cores com a etiqueta 'em produção' no cadastro que não estão em nenhum pedido — nem fabricando, nem a caminho"> · {view.kpis.orphanCount}⚠</span>
-              )}
-            </div>
-            <div className="prd-kpi-lbl">cores{view.kpis.orphanCount > 0 ? ' · etiqueta sem pedido' : ''}</div>
-          </div>
-          <div className="prd-kpi">
-            <div className="prd-kpi-val">{transitPieces.toLocaleString('pt-BR')}</div>
-            <div className="prd-kpi-lbl">peças em trânsito</div>
-          </div>
-          {view.overdueArrivals.length > 0 ? (
-            <button
-              type="button"
-              className="prd-kpi prd-kpi-alert"
-              onClick={() => onOpenOrder && onOpenOrder(view.overdueArrivals[0].id)}
-              title={view.overdueArrivals.map(a => `${a.name}: previsto ${formatDate(a.expectedArrival, 'full')} (${a.daysOverdue} dias atrás)`).join(' · ') + ' — já chegou? Abra o pedido e marque como concluído, ou atualize a previsão.'}
-            >
-              <div className="prd-kpi-val">⚠ {view.overdueArrivals[0].daysOverdue}d</div>
-              <div className="prd-kpi-lbl">
-                chegada vencida · {view.overdueArrivals[0].name}
-                {view.overdueArrivals.length > 1 && ` +${view.overdueArrivals.length - 1}`}
-              </div>
-            </button>
-          ) : view.nextArrival && (
-            <div className="prd-kpi" title={view.nextArrival.name}>
-              <div className="prd-kpi-val">{formatDate(view.nextArrival.expectedArrival, 'full')}</div>
-              <div className="prd-kpi-lbl">próxima chegada</div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ═════════ TOOLBAR STICKY ═════════ */}
-      <div className="prd-toolbar-wrap">
-        <div className="prd-toolbar">
-          <div className="prd-tabs">
-            <button
-              className={`prd-tab ${tab === 'production' ? 'active' : ''}`}
-              onClick={() => setTab('production')}
-            >
-              🏭 Em produção <span className="prd-tab-count">{totalPiecesProduction.toLocaleString('pt-BR')} pç</span>
-            </button>
-            <button
-              className={`prd-tab ${tab === 'in_transit' ? 'active' : ''}`}
-              onClick={() => setTab('in_transit')}
-            >
-              ✈ Em trânsito <span className="prd-tab-count">{transitPieces.toLocaleString('pt-BR')} pç</span>
-            </button>
-          </div>
-          <div className="prd-search">
-            <span className="prd-search-icon">🔍</span>
-            <input
-              placeholder="Buscar produto, cor..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <select
-            className="prd-sel"
-            value={factoryFilter}
-            onChange={e => setFactoryFilter(e.target.value)}
-          >
-            <option value="">Todas as fábricas</option>
-            {(factories || []).map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
-          </select>
-          {tab === 'production' && (
-            <>
-              <select
-                className="prd-sel"
-                value={collectionFilter}
-                onChange={e => setCollectionFilter(e.target.value)}
-              >
-                <option value="">Todas as coleções</option>
-                {(collections || []).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-              </select>
-              <select
-                className="prd-sel"
-                value={sortBy}
-                onChange={e => setSortBy(e.target.value)}
-              >
-                <option value="pieces">Mais peças</option>
-                <option value="urgency">Urgência</option>
-                <option value="alpha">A–Z</option>
-                <option value="count">Mais cores</option>
-                <option value="recent">Recente</option>
-              </select>
-              <label className={`prd-toggle ${showOnlyStuck ? 'active' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={showOnlyStuck}
-                  onChange={e => setShowOnlyStuck(e.target.checked)}
-                />
-                <span>◦ só sem pedido</span>
-              </label>
-            </>
-          )}
-          <ClearFiltersButton visible={hasFilters} onClear={clearFilters} />
-        </div>
-      </div>
-
-      {/* ═════════ CONTEÚDO ═════════ */}
-      <div className="prd-content">
-        {tab === 'production' ? (
-          <ProductionContent
-            byFactory={productionByFactory}
-            hasFilters={hasFilters}
-            onPhotoClick={setLb}
-            onOpenOrder={onOpenOrder}
-            onOpenPanorama={setPanoramaId}
-          />
+        <button type="button" className="pd-kpi clickable" onClick={() => setTab('in_transit')}>
+          <span className="pd-kpi-label">A caminho</span>
+          <span className="pd-kpi-value">{nf(transitPieces)} <small>peças</small></span>
+          <span className="pd-kpi-sub">{transit.length} pedido{transit.length !== 1 ? 's' : ''} em trânsito</span>
+        </button>
+        {overdue ? (
+          <button type="button" className="pd-kpi clickable bad" onClick={() => onOpenOrder && onOpenOrder(overdue.id)}>
+            <span className="pd-kpi-label">Chegada vencida</span>
+            <span className="pd-kpi-value">{overdue.daysOverdue} <small>dias</small></span>
+            <span className="pd-kpi-sub">{overdue.name} — já chegou?</span>
+          </button>
         ) : (
-          <TransitContent
-            byOrder={filteredTransitByOrder}
-            hasFilters={hasFilters}
-            onPhotoClick={setLb}
-            onOpenOrder={onOpenOrder}
-          />
+          <div className="pd-kpi">
+            <span className="pd-kpi-label">Próxima chegada</span>
+            <span className="pd-kpi-value">{next ? formatDate(next.expectedArrival, 'full') : '—'}</span>
+            <span className="pd-kpi-sub">{next ? next.name : 'nenhuma previsão cadastrada'}</span>
+          </div>
+        )}
+        <div className={`pd-kpi${atRisk.size > 0 ? ' bad' : ''}`}>
+          <span className="pd-kpi-label">Vão faltar na loja</span>
+          <span className="pd-kpi-value">{hasStore ? atRisk.size : '—'} <small>{hasStore ? `modelo${atRisk.size !== 1 ? 's' : ''}` : ''}</small></span>
+          <span className="pd-kpi-sub">{hasStore ? 'estoque acaba antes do lote chegar' : 'sincronize a Shopify'}</span>
+        </div>
+      </div>
+
+      {/* ═════════ 2. Controles ═════════ */}
+      <div className="pd-toolbar">
+        <div className="pd-seg" role="tablist">
+          <button role="tab" aria-selected={tab === 'production'} className={tab === 'production' ? 'on' : ''} onClick={() => setTab('production')}>
+            Em produção <span>{nf(k.totalQty)}</span>
+          </button>
+          <button role="tab" aria-selected={tab === 'in_transit'} className={tab === 'in_transit' ? 'on' : ''} onClick={() => setTab('in_transit')}>
+            Em trânsito <span>{nf(transitPieces)}</span>
+          </button>
+        </div>
+        <input
+          className="pd-input pd-search"
+          placeholder="Buscar modelo, cor ou pedido"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          aria-label="Buscar"
+        />
+        <select className="pd-input" value={factoryFilter} onChange={e => setFactoryFilter(e.target.value)} aria-label="Fábrica">
+          <option value="">Todas as fábricas</option>
+          {(factories || []).map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+        </select>
+        {tab === 'production' && (
+          <select className="pd-input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Ordenar">
+            {SORTS.filter(s => hasStore || s.id !== 'risk').map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
         )}
       </div>
 
-      {/* v13.64 — Panorama inteligente do produto */}
+      {tab === 'production' && k.orphanCount > 0 && (
+        <div className="pd-note">
+          {k.orphanCount} cor{k.orphanCount !== 1 ? 'es estão marcadas' : ' está marcada'} “em produção” no cadastro sem estar em nenhum pedido.
+          Elas aparecem nos cards com borda tracejada.
+        </div>
+      )}
+
+      {/* ═════════ 3. Conteúdo ═════════ */}
+      {tab === 'production' ? (
+        byFactory.length === 0 ? (
+          <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum pedido em produção agora.'}</div>
+        ) : byFactory.map(f => (
+          <section key={f.name} className="pd-factory">
+            <header className="pd-factory-head">
+              <h3>{f.name}</h3>
+              <span className="pd-factory-meta">
+                {nf(f.pieces)} peças · {f.groups.length} modelo{f.groups.length !== 1 ? 's' : ''}
+                {f.review > 0 && <> · {nf(f.review)} em revisão</>}
+                {f.eta && <> · próxima chegada {f.eta.etaEstimated ? '~' : ''}{f.eta.etaDays} dias</>}
+              </span>
+              {f.risk > 0 && <span className="pd-pill bad">{f.risk} vão faltar na loja</span>}
+            </header>
+            <div className="pd-grid">
+              {f.groups.map(g => (
+                <ModelCard
+                  key={g.key}
+                  group={g}
+                  coverageDays={storeIndex.coverageDays}
+                  onPhoto={setLb}
+                  onOpenOrder={onOpenOrder}
+                  onOpen={() => setPanoramaId(g.product.id)}
+                />
+              ))}
+            </div>
+          </section>
+        ))
+      ) : (
+        transitShown.length === 0 ? (
+          <div className="pd-empty">Nenhum pedido em trânsito.</div>
+        ) : transitShown.map(t => <TransitCard key={t.order.id} transit={t} onPhoto={setLb} onOpenOrder={onOpenOrder} />)
+      )}
+
+      {/* Panorama do modelo (clique no card) */}
       {panoramaId && (() => {
-        // Panorama é do MODELO inteiro (junta as fábricas onde ele está sendo feito)
         const g = view.byProduct.get(panoramaId)
         if (!g) return null
         return (
@@ -346,309 +287,156 @@ export default function ProducaoPage({
 }
 
 // ═════════════════════════════════════════════════════════════
-// SUB-COMPONENTS
+// Card de um modelo em produção numa fábrica
 // ═════════════════════════════════════════════════════════════
-
-function ProductionContent({ byFactory, hasFilters, onPhotoClick, onOpenOrder, onOpenPanorama }) {
-  if (byFactory.length === 0) {
-    return (
-      <EmptyState
-        icon="🏭"
-        title={hasFilters ? 'Nenhum resultado' : 'Nada em produção'}
-        desc={hasFilters
-          ? 'Limpe os filtros ou ajuste os critérios.'
-          : 'Quando uma cor entrar em produção, ela aparece aqui agrupada por fábrica.'}
-      />
-    )
-  }
-  return (
-    <>
-      {byFactory.map(({ factoryName, groups, totalCores, totalQty, reviewQty, stuckCores }, idx) => (
-        <div className="prd-factory-group" key={factoryName} style={{ animationDelay: `${idx * 0.08}s` }}>
-          <div className="prd-factory-sep">
-            <div className="prd-factory-name">
-              <em>{factoryName}</em>
-            </div>
-            <div className="prd-factory-meta">
-              <span className="prd-factory-qty">{totalQty.toLocaleString('pt-BR')} peças</span>
-              {' '}· {groups.length} produto{groups.length !== 1 ? 's' : ''} · {totalCores} cor{totalCores !== 1 ? 'es' : ''}
-              {reviewQty > 0 && <> · {reviewQty.toLocaleString('pt-BR')} em revisão</>}
-              {stuckCores > 0 && <span className="stuck-inline"> · {stuckCores} etiqueta{stuckCores !== 1 ? 's' : ''} sem pedido</span>}
-            </div>
-          </div>
-          <div className="prd-card-grid">
-            {groups.map((g, i) => (
-              <ProductCard
-                key={g.key}
-                group={g}
-                staggerDelay={i * 0.04}
-                onPhotoClick={onPhotoClick}
-                onOpenOrder={onOpenOrder}
-                onOpenPanorama={onOpenPanorama}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
-    </>
-  )
-}
-
-function ProductCard({ group, staggerDelay, onPhotoClick, onOpenOrder, onOpenPanorama }) {
-  const { product, cores, totalQty, orders = [] } = group
-  const photoUrl = product.card_image_url || (product.photos || [])[0]
-  const stuckCount = cores.filter(c => !c.hasOrder).length
-  const cardRef = useRef(null)
-  const [revealed, setRevealed] = useState(false)
-
-  useEffect(() => {
-    if (!cardRef.current) return
-    const el = cardRef.current
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setRevealed(true)
-            observer.unobserve(el)
-          }
-        }
-      },
-      { threshold: 0.1, rootMargin: '0px 0px -30px 0px' }
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
+function ModelCard({ group: g, coverageDays, onPhoto, onOpenOrder, onOpen }) {
+  const photo = g.product.card_image_url || (g.product.photos || [])[0]
+  const otherFactory = g.registeredFactory && g.registeredFactory !== g.factoryName
+  const o = g.outlook
+  const risk = o?.gapDays > 0
 
   return (
-    <article
-      ref={cardRef}
-      className={`prd-product-card clickable ${revealed ? 'revealed' : ''}`}
-      style={{ transitionDelay: `${staggerDelay}s` }}
-      onClick={() => onOpenPanorama && onOpenPanorama(product.id)}
-      title="Clique pra ver o panorama completo deste produto"
-    >
-      <div
-        className="prd-photo-wrap"
-        onClick={(e) => { e.stopPropagation(); if (photoUrl) onPhotoClick(photoUrl) }}
-        title={photoUrl ? 'Clique para ampliar a foto' : ''}
-      >
-        {photoUrl ? (
-          <img className="primary" src={photoUrl} alt={product.name} loading="lazy" />
-        ) : (
-          <div className="prd-photo-placeholder"><span>👑</span></div>
-        )}
-      </div>
-
-      <div className="prd-info">
-        {/* Nome + TOTAL DE PEÇAS (a pergunta nº1: quantas peças deste produto?) */}
-        <div className="prd-prod-head">
-          <h2 className="prd-prod-name">{product.name || 'Sem nome'}</h2>
-          <div className={`prd-prod-total ${totalQty === 0 ? 'zero' : ''}`} title={totalQty === 0 ? 'Nenhuma peça em pedido ativo' : 'Peças somadas dos pedidos ativos'}>
-            {totalQty > 0 ? <>{totalQty.toLocaleString('pt-BR')}<small> pç</small></> : '0 pç'}
-          </div>
-        </div>
-        {(product.collection || (group.registeredFactory && group.registeredFactory !== group.factoryName)) && (
-          <div className="prd-prod-meta">
-            {product.collection && <span className="prd-collection">{product.collection}</span>}
-            {group.registeredFactory && group.registeredFactory !== group.factoryName && (
-              <span className="prd-collection" title="No cadastro este modelo é de outra fábrica — estas peças estão sendo feitas aqui">
-                modelo da {group.registeredFactory}
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* v13.64 — Cores como SWATCHES grandes (os pontinhos de 20px eram ilegíveis) */}
-        <div className="prd-sw-grid">
-          {cores.map((c, idx) => (
-            <div
-              key={`${c.code}-${idx}`}
-              className={`prd-sw ${!c.hasOrder ? 'stuck' : ''}`}
-              onClick={(e) => { e.stopPropagation(); if (c.colorData?.photo_url) onPhotoClick(c.colorData.photo_url) }}
-              title={c.hasOrder
-                ? `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — ${c.qty} peça${c.qty !== 1 ? 's' : ''} em pedido ativo`
-                : `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''} — marcada "em produção" no cadastro, mas não está em nenhum pedido (nem a caminho)`}
-            >
-              <div className="prd-sw-img" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
-                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt={c.code} loading="lazy" />}
-                {c.hasOrder
-                  ? <span className="prd-sw-qty">×{c.qty}</span>
-                  : <span className="prd-sw-alert" title="Etiqueta sem pedido">!</span>}
-              </div>
-              <div className="prd-sw-code">{c.code}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Pedidos vinculados (clicáveis) com chegada/atraso */}
-        {(orders.length > 0 || stuckCount > 0) && (
-          <div className="prd-order-chips">
-            {orders.map(o => (
+    <article className={`pd-card${risk ? ' risk' : ''}`} onClick={onOpen} role="button" tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }} title="Ver o panorama completo do modelo">
+      <div className="pd-card-top">
+        <button
+          type="button"
+          className="pd-photo"
+          onClick={(e) => { e.stopPropagation(); if (photo) onPhoto(photo) }}
+          aria-label={photo ? 'Ampliar foto' : undefined}
+        >
+          {photo ? <img src={photo} alt="" loading="lazy" /> : <span>{(g.product.name || '?').slice(0, 1)}</span>}
+        </button>
+        <div className="pd-card-title">
+          <h4>{UC(g.product.name || 'Sem nome')}</h4>
+          {otherFactory && <span className="pd-card-sub">modelo cadastrado na {g.registeredFactory}</span>}
+          <div className="pd-orders">
+            {g.orders.map(ord => (
               <button
-                key={o.id}
-                className={`prd-order-chip ${o.isLate ? 'late' : ''}`}
-                onClick={(e) => { e.stopPropagation(); if (onOpenOrder) onOpenOrder(o.id) }}
-                title={onOpenOrder ? 'Abrir o pedido' : undefined}
+                key={ord.id}
+                type="button"
+                className={`pd-order${ord.isLate ? ' late' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onOpenOrder && onOpenOrder(ord.id) }}
+                title="Abrir o pedido"
               >
-                📋 {o.name}
-                {o.status === 'sent' && <span className="prd-chip-eta">em revisão</span>}
-                {o.isLate
-                  ? <span className="prd-chip-late">atrasado {o.daysLate}d</span>
-                  : (o.expectedArrival ? <span className="prd-chip-eta">chega {formatDate(o.expectedArrival, 'full')}</span> : null)}
+                {ord.name}
+                <em>
+                  {ord.status === 'sent' ? 'em revisão'
+                    : ord.isLate ? `atrasado ${ord.daysLate} dias`
+                    : ord.etaDays != null ? `${ord.etaEstimated ? '~' : ''}${ord.etaDays} dias` : 'sem previsão'}
+                </em>
               </button>
             ))}
-            {stuckCount > 0 && orders.length === 0 && (
-              <span className="prd-order-chip none">⚠ marcado "em produção" mas sem pedido nenhum — encomende ou tire a etiqueta no cadastro</span>
-            )}
           </div>
-        )}
+        </div>
+        <div className="pd-card-qty">
+          <strong>{nf(g.totalQty)}</strong>
+          <span>peças</span>
+        </div>
       </div>
-    </article>
-  )
-}
 
-function TransitContent({ byOrder, hasFilters, onPhotoClick, onOpenOrder }) {
-  if (byOrder.length === 0) {
-    return (
-      <EmptyState
-        icon="✈"
-        title={hasFilters ? 'Nenhum resultado' : 'Nenhum pedido em trânsito'}
-        desc={hasFilters
-          ? 'Limpe os filtros ou ajuste os critérios.'
-          : 'Pedidos aparecem aqui quando saem da fábrica e estão a caminho do Brasil.'}
-      />
-    )
-  }
-  return (
-    <>
-      {byOrder.map((t, idx) => (
-        <TransitCard key={t.order.id} transit={t} index={idx} onPhotoClick={onPhotoClick} onOpenOrder={onOpenOrder} />
-      ))}
-    </>
-  )
-}
+      <div className="pd-colors">
+        {g.cores.map(c => (
+          <div
+            key={c.code}
+            className={`pd-color${c.hasOrder ? '' : ' orphan'}`}
+            title={c.hasOrder
+              ? `${c.code}${c.colorData?.name_pt ? ' · ' + c.colorData.name_pt : ''}: ${c.qty} peças${c.qtyReview ? ` (${c.qtyReview} em revisão)` : ''}`
+              : `${c.code}: marcada "em produção" no cadastro, mas não está em nenhum pedido`}
+          >
+            <span className="pd-swatch" style={{ background: c.colorData?.hex || 'var(--line)' }}>
+              {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
+            </span>
+            <span className="pd-color-code"><Code code={c.code} /></span>
+            <span className="pd-color-qty">{c.hasOrder ? nf(c.qty) : 'sem pedido'}</span>
+          </div>
+        ))}
+      </div>
 
-function TransitCard({ transit, index, onPhotoClick, onOpenOrder }) {
-  const { order, orderDate, expectedArrival, products } = transit
-  const totalPieces = products.reduce((s, p) =>
-    s + p.cores.reduce((s2, c) => s2 + (c.qty || 0), 0), 0)
-  const cardRef = useRef(null)
-  const [revealed, setRevealed] = useState(false)
-
-  // Dias até a chegada (ou desde a data prevista, se passou)
-  const etaDays = expectedArrival
-    ? Math.ceil((parseDateLocal(expectedArrival) - new Date(new Date().toDateString())) / 86400000)
-    : null
-
-  useEffect(() => {
-    if (!cardRef.current) return
-    const el = cardRef.current
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setRevealed(true)
-            observer.unobserve(el)
-          }
-        }
-      },
-      { threshold: 0.1 }
-    )
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  return (
-    <article
-      ref={cardRef}
-      className={`prd-transit-card ${revealed ? 'revealed' : ''}`}
-      style={{ transitionDelay: `${index * 0.08}s` }}
-    >
-      <div className="prd-transit-header">
-        <div className="prd-transit-name">
-          <span className="prd-transit-eyebrow">pedido</span>
-          <h3
-            className={onOpenOrder ? 'clickable' : ''}
-            onClick={() => onOpenOrder && onOpenOrder(order.id)}
-            title={onOpenOrder ? 'Abrir o pedido' : undefined}
-          >{order.order_name || order.factory}</h3>
-          {etaDays != null && (
-            <span className={`prd-eta-badge ${etaDays < 0 ? 'late' : (etaDays <= 7 ? 'soon' : '')}`}>
-              {etaDays < 0
-                ? `previsto há ${Math.abs(etaDays)}d — já chegou? marque como concluído`
-                : etaDays === 0 ? 'chega hoje' : `chega em ${etaDays}d`}
+      {!o && g.outlookChecked && (
+        <div className="pd-store">
+          <span className="pd-store-label">Loja</span>
+          <span>ainda não está à venda (ou o SKU não está ligado)</span>
+        </div>
+      )}
+      {o && (
+        <div className={`pd-store${risk ? ' risk' : ''}`}>
+          <span className="pd-store-label">Loja</span>
+          <span>
+            {o.stock === 0 ? <strong>sem estoque</strong> : <><strong>{nf(o.stock)}</strong> em estoque</>}
+            {o.perDay > 0
+              ? <> · vende {perDayFmt(o.perDay)}/dia{o.stock > 0 && o.coverDays != null && <> · dura ~{o.coverDays} dias</>}</>
+              : <> · sem vendas nos últimos {coverageLabel(coverageDays)}</>}
+          </span>
+          {risk && (
+            <span className="pd-store-risk">
+              O lote chega em {g.eta.etaEstimated ? '~' : ''}{g.eta.etaDays} dias: a loja fica <strong>~{o.gapDays} dias sem</strong>.
+            </span>
+          )}
+          {!risk && !g.eta && o.perDay > 0 && o.coverDays != null && o.coverDays <= SOON_DAYS && (
+            <span className="pd-store-warn">
+              O estoque dura ~{o.coverDays} dias e este lote ainda não tem previsão de chegada.
             </span>
           )}
         </div>
-        <div className="prd-transit-meta">
-          <span>🏭 {order.factory}</span>
-          <span className="prd-meta-sep">·</span>
-          <span>🗓 {formatDate(orderDate, 'full')}</span>
-          {expectedArrival && (
-            <>
-              <span className="prd-meta-sep">·</span>
-              <span>📅 chega {formatDate(expectedArrival, 'full')}</span>
-            </>
-          )}
-          <span className="prd-meta-sep">·</span>
-          <span><strong>{totalPieces}</strong> peça{totalPieces !== 1 ? 's' : ''}</span>
-        </div>
-      </div>
-      <div className="prd-transit-products">
-        {products.map(p => (
-          <TransitProductRow
-            key={p.product.id}
-            product={p.product}
-            cores={p.cores}
-            onPhotoClick={onPhotoClick}
-          />
-        ))}
-      </div>
+      )}
     </article>
   )
 }
 
-function TransitProductRow({ product, cores, onPhotoClick }) {
-  const photoUrl = product.card_image_url || (product.photos || [])[0]
-  const totalQty = cores.reduce((s, c) => s + (c.qty || 0), 0)
+// ═════════════════════════════════════════════════════════════
+// Pedido em trânsito
+// ═════════════════════════════════════════════════════════════
+function TransitCard({ transit: t, onPhoto, onOpenOrder }) {
+  const o = t.order
+  const overdue = t.days != null && t.days < 0
   return (
-    <div className="prd-transit-row">
-      <div
-        className="prd-transit-row-photo"
-        onClick={() => photoUrl && onPhotoClick(photoUrl)}
-        title={photoUrl ? 'Clique para ampliar' : ''}
-      >
-        {photoUrl ? (
-          <img src={photoUrl} alt="" loading="lazy" />
-        ) : (
-          <div className="prd-photo-placeholder-sm"><span>👑</span></div>
-        )}
-      </div>
-      <div className="prd-transit-row-info">
-        <div className="prd-transit-row-name">
-          {product.name} <span className="prd-transit-row-qty">{totalQty} peça{totalQty !== 1 ? 's' : ''}</span>
+    <section className="pd-transit">
+      <header className="pd-transit-head">
+        <div>
+          <button type="button" className="pd-transit-name" onClick={() => onOpenOrder && onOpenOrder(o.id)}>
+            {o.order_name || `${o.factory} (sem nome)`}
+          </button>
+          <span className="pd-transit-meta">
+            {o.factory} · {nf(t.pieces)} peças · {t.models.length} modelo{t.models.length !== 1 ? 's' : ''}
+            {(o.order_date || o.created_at) && <> · pedido {formatDate(o.order_date || o.created_at, 'full')}</>}
+          </span>
         </div>
-        <div className="prd-pills">
-          {cores.map((c, idx) => (
-            <div
-              key={`${c.code}-${idx}`}
-              className="prd-pill"
-              onClick={(e) => {
-                e.stopPropagation()
-                if (c.colorData?.photo_url) onPhotoClick(c.colorData.photo_url)
-              }}
-              title={c.colorData?.name_pt || c.code}
-            >
-              <span className="prd-pill-dot" style={{ background: c.colorData?.hex || 'var(--border-light)' }}>
-                {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
-              </span>
-              <span className="prd-pill-code">{c.code}</span>
-              <span className="prd-pill-qty">×{c.qty}</span>
+        <span className={`pd-pill${overdue ? ' bad' : ''}`}>
+          {t.days == null ? 'sem previsão de chegada'
+            : overdue ? `previsão venceu há ${-t.days} dias`
+            : t.days === 0 ? 'chega hoje'
+            : `chega em ${t.days} dias · ${formatDate(o.expected_arrival, 'full')}`}
+        </span>
+      </header>
+      <div className="pd-transit-models">
+        {t.models.map(m => {
+          const photo = m.product.card_image_url || (m.product.photos || [])[0]
+          const total = m.cores.reduce((a, c) => a + c.qty, 0)
+          return (
+            <div key={m.key} className="pd-transit-row">
+              <button type="button" className="pd-photo sm" onClick={() => photo && onPhoto(photo)} aria-label={photo ? 'Ampliar foto' : undefined}>
+                {photo ? <img src={photo} alt="" loading="lazy" /> : <span>{(m.product.name || '?').slice(0, 1)}</span>}
+              </button>
+              <div className="pd-transit-model">
+                <strong>{UC(m.product.name || '')}</strong>
+                <span>{nf(total)} peças</span>
+              </div>
+              <div className="pd-chips">
+                {m.cores.map(c => (
+                  <span key={c.code} className="pd-chip" title={c.colorData?.name_pt || c.code}>
+                    <i style={{ background: c.colorData?.hex || 'var(--line)' }}>
+                      {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
+                    </i>
+                    {c.code}<b>{c.qty}</b>
+                  </span>
+                ))}
+              </div>
             </div>
-          ))}
-        </div>
+          )
+        })}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -849,15 +637,6 @@ function ProductPanorama({ group, orders, colors, perm, shopifyCache, onOpenOrde
   )
 }
 
-function EmptyState({ icon, title, desc }) {
-  return (
-    <div className="prd-empty">
-      <div className="prd-empty-icon">{icon}</div>
-      <div className="prd-empty-title">{title}</div>
-      <div className="prd-empty-desc">{desc}</div>
-    </div>
-  )
-}
 
 // ═════════════════════════════════════════════════════════════
 // ESTILOS
@@ -882,7 +661,7 @@ const PRODUCAO_STYLES = `
   flex-wrap: wrap;
 }
 .prd-title-compact {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-weight: 400;
   font-size: 34px;
   line-height: 1;
@@ -891,8 +670,7 @@ const PRODUCAO_STYLES = `
   margin: 0;
 }
 .prd-title-compact em {
-  font-style: italic;
-  color: var(--accent);
+  color: var(--text);
   font-weight: 400;
 }
 .prd-kpis {
@@ -903,14 +681,14 @@ const PRODUCAO_STYLES = `
 }
 .prd-kpi { text-align: right; }
 .prd-kpi-val {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-size: 24px;
   font-weight: 500;
   line-height: 1.05;
   color: var(--text);
   letter-spacing: -0.02em;
 }
-.prd-kpi-warn { color: var(--accent); font-size: 15px; font-weight: 600; }
+.prd-kpi-warn { color: var(--text); font-size: 15px; font-weight: 600; }
 /* v13.73 — chegada vencida no lugar da "próxima chegada" que estava no passado */
 .prd-kpi-alert {
   background: none; border: 0; padding: 0; cursor: pointer; font: inherit;
@@ -918,10 +696,8 @@ const PRODUCAO_STYLES = `
 .prd-kpi-alert .prd-kpi-val, .prd-kpi-alert .prd-kpi-lbl { color: #DC2626; }
 .prd-kpi-alert:hover .prd-kpi-lbl { text-decoration: underline; }
 .prd-kpi-lbl {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
   color: var(--text-muted);
   margin-top: 3px;
 }
@@ -966,7 +742,6 @@ const PRODUCAO_STYLES = `
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
-  letter-spacing: 0.02em;
   transition: all .25s cubic-bezier(.2,.9,.3,1);
   display: inline-flex;
   align-items: center;
@@ -980,7 +755,7 @@ const PRODUCAO_STYLES = `
 }
 .prd-tab:hover:not(.active) { color: var(--text); }
 .prd-tab-count {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 600;
   opacity: .75;
@@ -999,7 +774,7 @@ const PRODUCAO_STYLES = `
   transition: all .2s;
 }
 .prd-search:focus-within {
-  border-color: var(--accent);
+  border-color: var(--text);
   box-shadow: 0 0 0 3px var(--accent-light);
 }
 .prd-search input {
@@ -1031,7 +806,7 @@ const PRODUCAO_STYLES = `
   transition: border-color .2s;
   max-width: 180px;
 }
-.prd-sel:hover { border-color: var(--accent); }
+.prd-sel:hover { border-color: var(--text); }
 .prd-toggle {
   display: inline-flex;
   align-items: center;
@@ -1051,7 +826,7 @@ const PRODUCAO_STYLES = `
 .prd-toggle.active {
   background: var(--accent-light);
   color: var(--text);
-  border-color: var(--accent);
+  border-color: var(--text);
 }
 .prd-toggle input { display: none; }
 
@@ -1088,26 +863,23 @@ const PRODUCAO_STYLES = `
   background: var(--border);
 }
 .prd-factory-name {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-weight: 500;
   font-size: 22px;
   letter-spacing: -0.01em;
   color: var(--text);
 }
 .prd-factory-name em {
-  font-style: italic;
-  color: var(--accent);
+  color: var(--text);
   font-weight: 500;
 }
 .prd-factory-meta {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
   color: var(--text-muted);
 }
 .prd-factory-qty { color: var(--text); font-weight: 600; font-size: 11px; }
-.stuck-inline { color: var(--accent); font-weight: 600; }
+.stuck-inline { color: var(--text); font-weight: 600; }
 
 /* ═══ CARD GRID — 2 colunas ═══ */
 .prd-card-grid {
@@ -1194,7 +966,7 @@ const PRODUCAO_STYLES = `
   gap: 10px;
 }
 .prd-prod-name {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-weight: 500;
   font-size: 19px;
   line-height: 1.1;
@@ -1206,17 +978,15 @@ const PRODUCAO_STYLES = `
   white-space: nowrap;
 }
 .prd-prod-total {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 17px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text);
   white-space: nowrap;
   flex-shrink: 0;
 }
 .prd-prod-total small {
   font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
   opacity: .75;
 }
 .prd-prod-total.zero { color: var(--text-muted); font-weight: 400; }
@@ -1227,8 +997,7 @@ const PRODUCAO_STYLES = `
 }
 .prd-collection {
   color: var(--text-secondary);
-  font-style: italic;
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-size: 12px;
 }
 
@@ -1254,7 +1023,7 @@ const PRODUCAO_STYLES = `
 }
 .prd-pill:hover {
   transform: scale(1.04);
-  border-color: var(--accent);
+  border-color: var(--text);
 }
 .prd-pill-dot {
   width: 20px; height: 20px;
@@ -1270,8 +1039,7 @@ const PRODUCAO_STYLES = `
   object-fit: cover;
 }
 .prd-pill-code {
-  font-family: 'DM Mono', ui-monospace, monospace;
-  letter-spacing: 0.02em;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1282,22 +1050,20 @@ const PRODUCAO_STYLES = `
   color: var(--bg);
   padding: 1px 7px;
   border-radius: 8px;
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 600;
 }
 .prd-pill.stuck {
-  border-color: var(--accent);
+  border-color: var(--text);
   box-shadow: 0 0 0 1px var(--accent);
   animation: prdStuckPulse 3s ease-in-out infinite;
 }
 .prd-pill-warn {
-  color: var(--accent);
-  font-family: 'DM Mono', ui-monospace, monospace;
+  color: var(--text);
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 @keyframes prdStuckPulse {
   0%, 100% { box-shadow: 0 0 0 1px var(--accent); }
@@ -1341,7 +1107,7 @@ const PRODUCAO_STYLES = `
   color: #fff;
   padding: 1px 6px;
   border-radius: 8px;
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 700;
   backdrop-filter: blur(2px);
@@ -1363,7 +1129,7 @@ const PRODUCAO_STYLES = `
 }
 .prd-sw-code {
   margin-top: 4px;
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
   color: var(--text);
   overflow: hidden;
@@ -1404,20 +1170,18 @@ const PRODUCAO_STYLES = `
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
-.prd-pan-meta .mono { font-family: 'DM Mono', ui-monospace, monospace; font-size: 11px; }
+.prd-pan-meta .mono { font-family: var(--font-ui); font-variant-numeric: tabular-nums; font-size: 11px; }
 .prd-pan-total {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-size: 34px;
   font-weight: 500;
-  color: var(--accent);
+  color: var(--text);
   line-height: 1;
   letter-spacing: -0.02em;
 }
 .prd-pan-total small {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
   color: var(--text-muted);
   margin-left: 8px;
 }
@@ -1436,7 +1200,7 @@ const PRODUCAO_STYLES = `
   border-radius: 10px;
   background: #EEF2F7;
   color: #475569;
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
 }
 .prd-pan-price.alert { background: #FEE2E2; color: #991B1B; }
 .prd-pan-shop {
@@ -1447,10 +1211,8 @@ const PRODUCAO_STYLES = `
 .prd-pan-shop-age { color: #B45309; font-size: 11px; }
 .prd-pan-sec {
   margin: 16px 0 8px;
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-light);
   padding-bottom: 4px;
@@ -1480,28 +1242,26 @@ const PRODUCAO_STYLES = `
   background: none;
   border: none;
   padding: 0;
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
   cursor: pointer;
 }
-.prd-pan-order-name:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.prd-pan-order-name:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 .prd-pan-order-status {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   color: var(--text-muted);
   border: 1px solid var(--border);
   padding: 2px 8px;
   border-radius: 8px;
 }
 .prd-pan-order-qty {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 12px;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--text);
 }
 .prd-pan-order-fob {
   font-size: 11px;
@@ -1533,7 +1293,7 @@ const PRODUCAO_STYLES = `
   margin-top: 12px;
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
 }
 
 /* ═══ CHIPS de pedido vinculado ═══ */
@@ -1559,29 +1319,26 @@ const PRODUCAO_STYLES = `
 }
 .prd-order-chip:hover {
   border-style: solid;
-  border-color: var(--accent);
+  border-color: var(--text);
   color: var(--text);
 }
 .prd-order-chip.late { border-color: #DC2626; }
 .prd-order-chip.none {
   cursor: default;
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--text);
+  color: var(--text);
   font-weight: 600;
 }
 .prd-chip-eta {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
-  letter-spacing: 0.04em;
   color: var(--text-muted);
 }
 .prd-chip-late {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
   font-weight: 700;
   color: #DC2626;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 /* ═══ TRANSIT CARD ═══ */
@@ -1613,14 +1370,12 @@ const PRODUCAO_STYLES = `
   flex-wrap: wrap;
 }
 .prd-transit-eyebrow {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
   color: var(--text-muted);
 }
 .prd-transit-name h3 {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-weight: 500;
   font-size: 20px;
   letter-spacing: -0.01em;
@@ -1628,12 +1383,11 @@ const PRODUCAO_STYLES = `
   margin: 0;
 }
 .prd-transit-name h3.clickable { cursor: pointer; }
-.prd-transit-name h3.clickable:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.prd-transit-name h3.clickable:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 .prd-eta-badge {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.06em;
   padding: 3px 10px;
   border-radius: 10px;
   background: var(--accent-light);
@@ -1695,7 +1449,7 @@ const PRODUCAO_STYLES = `
 }
 .prd-transit-row-info { min-width: 0; }
 .prd-transit-row-name {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-size: 15px;
   font-weight: 500;
   color: var(--text);
@@ -1703,9 +1457,8 @@ const PRODUCAO_STYLES = `
   letter-spacing: -0.01em;
 }
 .prd-transit-row-qty {
-  font-family: 'DM Mono', ui-monospace, monospace;
+  font-family: var(--font-ui); font-variant-numeric: tabular-nums;
   font-size: 10px;
-  letter-spacing: 0.08em;
   color: var(--text-muted);
   font-weight: 400;
   margin-left: 6px;
@@ -1725,7 +1478,7 @@ const PRODUCAO_STYLES = `
   margin-bottom: 12px;
 }
 .prd-empty-title {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-ui);
   font-size: 20px;
   color: var(--text);
   margin-bottom: 6px;

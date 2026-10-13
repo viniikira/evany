@@ -2,7 +2,7 @@
 // v13.73 — Produção derivada dos pedidos. Os casos espelham o banco real de
 // 18/09/2026, onde a tela mostrava 3.400 peças e os pedidos somavam 4.785.
 import { describe, it, expect } from 'vitest'
-import { buildProductionView } from './production'
+import { buildProductionView, soonestEta } from './production'
 
 const NOW = new Date(2026, 8, 18, 12, 0, 0).getTime()   // 18/09/2026 local
 
@@ -133,5 +133,31 @@ describe('buildProductionView — itens sem cadastro', () => {
       now: NOW,
     })
     expect(v.groups.some(g => g.product.id === 'lara')).toBe(false)
+  })
+})
+
+describe('chegada estimada por pedido (v13.76)', () => {
+  it('usa a previsão quando existe', () => {
+    const g = view.groups.find(x => x.factoryName === 'HAIR FORTUNE')
+    const o = g.orders.find(x => x.id === 'ago')
+    expect(o.etaDays).toBe(73)          // 18/09 → 30/11
+    expect(o.etaEstimated).toBe(false)
+  })
+
+  it('sem previsão: fim da fabricação + frete, marcado como estimado', () => {
+    const v = buildProductionView({
+      products, now: NOW,
+      orders: [{ id: 'x', factory: 'EPF', status: 'manufacturing', order_date: '2026-09-08', promised_lead_days: 60,
+        items: [line('lara', '1B', 10)] }],
+    })
+    const o = v.groups[0].orders[0]
+    expect(o.etaDays).toBe(50 + 30)     // 60 − 10 dias corridos + 30 de frete
+    expect(o.etaEstimated).toBe(true)
+  })
+
+  it('soonestEta pega o pedido que chega primeiro', () => {
+    expect(soonestEta([{ etaDays: 90, name: 'a' }, { etaDays: 20, etaEstimated: true, name: 'b' }, { etaDays: null }]))
+      .toEqual({ etaDays: 20, etaEstimated: true, orderName: 'b' })
+    expect(soonestEta([])).toBe(null)
   })
 })

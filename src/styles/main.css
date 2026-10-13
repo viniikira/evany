@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=Fraunces:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 *,*::before,*::after { margin: 0; padding: 0; box-sizing: border-box }
 
@@ -29,6 +29,25 @@
   --shadow: 0 1px 3px rgba(74,25,66,.06), 0 4px 12px rgba(74,25,66,.04);
   --shadow-lg: 0 4px 20px rgba(74,25,66,.1);
   --transition: all .2s ease;
+
+  /* v13.76 — tipografia e cores de trabalho (Pedidos/Produção redesenhados).
+     Inter em tudo: legível em tamanho pequeno e com números alinhados. */
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --text-2: #5F5560;          /* secundário que ainda se lê (o --text-muted é claro demais pra texto) */
+  --line: #EEE9E5;
+  --hover: #FAF7F5;
+  /* Etapas do pedido: uma cor por etapa, sempre a mesma em todo o sistema */
+  --st-draft: #8A8F98;
+  --st-sent: #2563EB;
+  --st-mfg: #D97706;
+  --st-transit: #7C3AED;
+  --st-done: #059669;
+  --bad: #DC2626;
+  --bad-bg: #FEF2F2;
+  --warn-ink: #B45309;
+  --warn-bg: #FFFBEB;
+  --good: #059669;
+  --good-bg: #ECFDF5;
 }
 
 /* v13.27 — Tema escuro
@@ -59,10 +78,24 @@
   --sidebar-active: rgba(201,164,220,.15);
   --shadow: 0 1px 3px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.2);
   --shadow-lg: 0 4px 20px rgba(0,0,0,.4);
+  --text-2: #C2BAB1;
+  --line: #34302C;
+  --hover: #2C2826;
+  --st-draft: #9CA3AF;
+  --st-sent: #60A5FA;
+  --st-mfg: #FBBF24;
+  --st-transit: #A78BFA;
+  --st-done: #34D399;
+  --bad: #F87171;
+  --bad-bg: #3A1F1F;
+  --warn-ink: #FBBF24;
+  --warn-bg: #3A2F17;
+  --good: #34D399;
+  --good-bg: #17332A;
 }
 
 body, #root {
-  font-family: 'Sora', sans-serif;
+  font-family: var(--font-ui);
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
@@ -71,7 +104,7 @@ body, #root {
   -webkit-font-smoothing: antialiased;
 }
 
-h1, h2, h3, h4 { font-family: 'Fraunces', serif; font-weight: 700; color: var(--primary) }
+h1, h2, h3, h4 { font-family: var(--font-ui); font-weight: 600; color: var(--text); letter-spacing: -0.01em }
 
 .app { display: flex; min-height: 100vh }
 .main { margin-left: 240px; flex: 1; min-height: 100vh }
@@ -131,7 +164,7 @@ h1, h2, h3, h4 { font-family: 'Fraunces', serif; font-weight: 700; color: var(--
   border-radius: var(--radius); padding: 18px;
   box-shadow: var(--shadow);
 }
-.card-title { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 700; color: var(--primary); margin-bottom: 12px }
+.card-title { font-family: var(--font-ui); font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px }
 .card-hover { cursor: pointer; transition: var(--transition) }
 .card-hover:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg) }
 
@@ -146,8 +179,8 @@ h1, h2, h3, h4 { font-family: 'Fraunces', serif; font-weight: 700; color: var(--
 }
 .stat-card.clickable { cursor: pointer; transition: var(--transition) }
 .stat-card.clickable:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg) }
-.stat-val { font-size: 32px; font-weight: 800; font-family: 'Fraunces', serif; color: var(--primary) }
-.stat-lbl { font-size: 11px; color: var(--text-secondary); margin-top: 4px; text-transform: uppercase; letter-spacing: 1px }
+.stat-val { font-size: 28px; font-weight: 600; font-family: var(--font-ui); color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.02em }
+.stat-lbl { font-size: 12px; color: var(--text-2); margin-top: 4px }
 
 .toolbar {
   display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
@@ -249,7 +282,7 @@ textarea.field { min-height: 80px; resize: vertical; font-family: inherit }
   position: sticky; top: 0; background: var(--surface); z-index: 2;
   border-radius: 14px 14px 0 0;
 }
-.mt { font-family: 'Fraunces', serif; font-size: 18px; color: var(--primary); margin: 0 }
+.mt { font-family: var(--font-ui); font-size: 18px; color: var(--primary); margin: 0 }
 .mb { padding: 18px 22px; overflow-y: auto; flex: 1 }
 .mf {
   padding: 14px 22px; border-top: 1px solid var(--border);
@@ -293,7 +326,7 @@ textarea.field { min-height: 80px; resize: vertical; font-family: inherit }
   padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 700;
 }
 .pcard-info { padding: 12px }
-.pcard-name { font-family: 'Fraunces', serif; font-weight: 700; font-size: 15px; color: var(--primary); margin-bottom: 2px }
+.pcard-name { font-family: var(--font-ui); font-weight: 700; font-size: 15px; color: var(--primary); margin-bottom: 2px }
 
 .tag-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px }
 .tag {
