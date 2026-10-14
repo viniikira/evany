@@ -3,6 +3,7 @@
 // Duas calculadoras: custo de importação + lucro de venda
 
 import { useState } from 'react'
+import { MoneyInput } from '../components/MoneyInput'
 
 export function CalculatorPage({ rate: liveRate, perm }) {
   const [tab, setTab] = useState('cost')
@@ -30,11 +31,11 @@ function CostCalc({ liveRate }) {
   return <div className="card" style={{ maxWidth: 600 }}>
     <div className="card-title">🧮 Custo de Importação</div>
     <div className="form-row">
-      <div className="form-group"><label className="field-label">Preço USD</label><input className="field" type="number" step="0.01" value={priceUsd} onChange={e => setPriceUsd(e.target.value)} placeholder="17.50" /></div>
-      <div className="form-group"><label className="field-label">Fator</label><input className="field" type="number" step="0.1" value={factor} onChange={e => setFactor(e.target.value)} /></div>
+      <div className="form-group"><label className="field-label">Preço USD</label><MoneyInput value={priceUsd} onChange={v => setPriceUsd(v ?? '')} placeholder="17,50" /></div>
+      <div className="form-group"><label className="field-label">Fator</label><MoneyInput value={factor} onChange={v => setFactor(v ?? '')} /></div>
     </div>
     <div className="form-row">
-      <div className="form-group"><label className="field-label">Cotação</label><input className="field" type="number" step="0.01" value={customRate} onChange={e => setCustomRate(e.target.value)} placeholder={liveRate ? `R$ ${liveRate.toFixed(2)}` : ''} /></div>
+      <div className="form-group"><label className="field-label">Cotação</label><MoneyInput value={customRate} onChange={v => setCustomRate(v ?? '')} placeholder={liveRate ? `R$ ${liveRate.toFixed(2).replace(".", ",")}` : ''} /></div>
       <div className="form-group"><label className="field-label">Quantidade</label><input className="field" type="number" value={qty} onChange={e => setQty(e.target.value)} /></div>
     </div>
     {p > 0 && (
@@ -91,42 +92,42 @@ function ProfitCalc() {
     <div className="form-row">
       <div className="form-group">
         <label className="field-label">Preço de Venda (R$) *</label>
-        <input className="field" type="number" step="0.01" value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="550" />
+        <MoneyInput value={sellPrice} onChange={v => setSellPrice(v ?? '')} placeholder="550,00" />
       </div>
       <div className="form-group">
         <label className="field-label">Custo do Produto (R$) *</label>
-        <input className="field" type="number" step="0.01" value={costPrice} onChange={e => setCostPrice(e.target.value)} placeholder="150" />
+        <MoneyInput value={costPrice} onChange={v => setCostPrice(v ?? '')} placeholder="150,00" />
       </div>
     </div>
     <div className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>TAXAS E DESPESAS</div>
     <div className="form-row">
       <div className="form-group">
         <label className="field-label">Embalagem (R$)</label>
-        <input className="field" type="number" step="0.01" value={packaging} onChange={e => setPackaging(e.target.value)} />
+        <MoneyInput value={packaging} onChange={v => setPackaging(v ?? '')} />
       </div>
       <div className="form-group">
         <label className="field-label">Frete (R$)</label>
-        <input className="field" type="number" step="0.01" value={freight} onChange={e => setFreight(e.target.value)} />
+        <MoneyInput value={freight} onChange={v => setFreight(v ?? '')} />
       </div>
     </div>
     <div className="form-row">
       <div className="form-group">
         <label className="field-label">Imposto NF (%)</label>
-        <input className="field" type="number" step="0.01" value={taxNF} onChange={e => setTaxNF(e.target.value)} />
+        <MoneyInput value={taxNF} onChange={v => setTaxNF(v ?? '')} />
       </div>
       <div className="form-group">
         <label className="field-label">Taxa Cartão (%)</label>
-        <input className="field" type="number" step="0.01" value={cardFee} onChange={e => setCardFee(e.target.value)} />
+        <MoneyInput value={cardFee} onChange={v => setCardFee(v ?? '')} />
       </div>
     </div>
     <div className="form-row">
       <div className="form-group">
         <label className="field-label">Cupom/Desconto (%)</label>
-        <input className="field" type="number" step="0.01" value={coupon} onChange={e => setCoupon(e.target.value)} />
+        <MoneyInput value={coupon} onChange={v => setCoupon(v ?? '')} />
       </div>
       <div className="form-group">
         <label className="field-label">Outros (R$)</label>
-        <input className="field" type="number" step="0.01" value={other} onChange={e => setOther(e.target.value)} />
+        <MoneyInput value={other} onChange={v => setOther(v ?? '')} />
       </div>
     </div>
     {sell > 0 && (

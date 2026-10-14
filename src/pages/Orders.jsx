@@ -929,6 +929,7 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
     {creator && (
       <OrderCreator
         order={creator.order || null}
+        initialStep={creator.step || null}
         prefill={creator.prefill || null}
         factories={factories}
         products={products}
@@ -953,6 +954,7 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         user={user}
         onClose={() => setDetail(null)}
         onEdit={() => { setCreator({ order: detail }); setDetail(null) }}
+        onEditPrices={() => { setCreator({ order: detail, step: 3 }); setDetail(null) }}
         onDelete={() => remove(detail)}
         onStatus={s => changeStatus(detail, s)}
         onArrivalSave={perm.orders ? async (d) => { const ok = await updateArrival(detail, d); if (ok) setDetail(prev => prev ? { ...prev, expected_arrival: d || null } : prev); return ok } : undefined}

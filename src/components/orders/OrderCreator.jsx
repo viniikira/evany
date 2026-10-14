@@ -19,6 +19,10 @@ import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
 import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel } from '../../lib/orderIntelligence'
 import { proposeOrderName } from '../../lib/orderNaming'
+import { MoneyInput } from '../MoneyInput'
+import { ReviewPriceTable } from './ReviewPriceTable'
+import { computeOrderFinal } from '../../lib/financial'
+import { formatFixedBR } from '../../lib/moneyMask'
 import { buildRestockView, restockForColor, DEFAULT_TARGET_COVER_DAYS } from '../../lib/restock'
 import { ORDER_ST } from '../../lib/constants'
 import { uid, UC, formatDate, parseDateLocal } from '../../lib/utils'
@@ -63,12 +67,13 @@ const itemsFromOrder = (src) => (src?.items || []).map(it => ({
   })),
 }))
 
-export function OrderCreator({ order = null, prefill = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), shopifyCache = null, onSave, onClose }) {
+export function OrderCreator({ order = null, prefill = null, initialStep = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), shopifyCache = null, onSave, onClose }) {
   const confirm = useConfirm()
   const toast = useToast()
   const isEdit = !!(order && order.id)
   // Editando ou duplicando, a fábrica já existe — abre direto na mesa de criação
-  const [step, setStep] = useState(isEdit || prefill ? 2 : 1)
+  // v13.78 — "Preços e trading" abre direto na revisão (etapa 3)
+  const [step, setStep] = useState(initialStep || (isEdit || prefill ? 2 : 1))
 
   // v13.62 — HIDE MODE: esconde TODOS os valores da tela (pra criar pedido
   // com uma funcionária olhando sem expor custos). Persiste entre sessões.
@@ -378,7 +383,18 @@ export function OrderCreator({ order = null, prefill = null, factories, products
         fob += q * (cp || 0)
       }
     }
-    return { qty, fob, landed: effRate > 0 ? fob * effFactor * effRate : null }
+    // v13.78 — total da compra pela MESMA regra da revisão e do financeiro:
+    // valor final da trading onde já existe, FOB × fator onde ainda não
+    const fin = computeOrderFinal({
+      conversion_factor: effFactor,
+      items: (f.items || []).map(it => ({ ...it, price_usd_snapshot: it.price_usd })),
+    })
+    return {
+      qty, fob,
+      total: fin.total,
+      confirmedAll: fin.isFullyConfirmed,
+      landed: effRate > 0 ? fin.total * effRate : null,
+    }
   }, [f.items, effFactor, effRate])
 
   const modelInfo = (it) => {
@@ -466,7 +482,8 @@ export function OrderCreator({ order = null, prefill = null, factories, products
   }, [])
 
   const canAdvance = step === 1 ? !!f.factory : (f.items || []).some(it => (it.colors || []).some(c => Number(c.qty || 0) > 0))
-  const fmt$ = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  // v13.78 — padrão brasileiro (antes: $2,683.50)
+  const fmt$ = (n) => 'US$ ' + formatFixedBR(Math.round(n * 100) / 100)
   const fmtR$ = (n) => 'R$ ' + Math.round(n).toLocaleString('pt-BR')
 
   return (
@@ -516,21 +533,23 @@ export function OrderCreator({ order = null, prefill = null, factories, products
               title={`Custo estimado no Brasil = FOB × fator × dólar.\nFator (~1,50–1,80) cobre frete/impostos; dólar você trava no valor que preferir (sugestão: cotação arredondada pra cima).\nOs dois ficam salvos no pedido.`}
             >
               <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>fator ×</span>
-              <input
-                type="number" step="0.05" min="1"
+              <MoneyInput
+                className=""
                 value={f.conversion_factor ?? ''}
-                onChange={e => setCostParam('conversion_factor', 'kira.conv_factor', e.target.value)}
-                aria-label="Fator de conversão da importação"
-                style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: 'var(--text)' }}
+                onChange={v => setCostParam('conversion_factor', 'kira.conv_factor', v ?? '')}
+                ariaLabel="Fator de conversão da importação"
+                title="Digite só os números: 175 vira 1,75"
+                style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: 'var(--text)', padding: 0 }}
               />
               <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>· US$</span>
-              <input
-                type="number" step="0.05" min="0"
-                placeholder={suggestedRate ? suggestedRate.toFixed(2) : '0.00'}
+              <MoneyInput
+                className=""
+                placeholder={suggestedRate ? formatFixedBR(suggestedRate) : '0,00'}
                 value={f.budget_rate ?? ''}
-                onChange={e => setCostParam('budget_rate', 'kira.budget_rate', e.target.value)}
-                aria-label="Dólar usado no cálculo"
-                style={{ width: 58, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: 'var(--text)' }}
+                onChange={v => setCostParam('budget_rate', 'kira.budget_rate', v ?? '')}
+                ariaLabel="Dólar usado no cálculo"
+                title="Digite só os números: 570 vira 5,70"
+                style={{ width: 58, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: 'var(--text)', padding: 0 }}
               />
             </div>
           )}
@@ -935,7 +954,7 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                       {showPrices && (
                         <div style={{ width: 110 }}>
                           <label className="text-muted" style={{ fontSize: 9, display: 'block', marginBottom: 2 }}>💲 PREÇO USD BASE</label>
-                          <input className="field field-sm" type="number" step="0.01" placeholder="0.00" value={it.price_usd ?? ''} onChange={e => updItem(it.id, 'price_usd', e.target.value)} />
+                          <MoneyInput className="field field-sm" value={it.price_usd ?? ''} onChange={v => updItem(it.id, 'price_usd', v ?? '')} ariaLabel="Preço USD base do modelo" />
                         </div>
                       )}
                       <button className="btn-icon text-danger" onClick={() => rmItem(it.id)} title="Remover modelo do pedido" aria-label="Remover modelo do pedido">✕</button>
@@ -1146,12 +1165,12 @@ export function OrderCreator({ order = null, prefill = null, factories, products
                               }}
                             >
                               <span style={{ fontSize: 12, color: 'var(--text-muted, #6b7280)' }}>$</span>
-                              <input
-                                type="number" step="0.01" min="0"
-                                placeholder={pu > 0 ? pu.toFixed(2) : '0.00'}
+                              <MoneyInput
+                                className=""
+                                placeholder={pu > 0 ? formatFixedBR(pu) : '0,00'}
                                 value={cl.price_usd ?? ''}
-                                onChange={e => updColor(it.id, idx, 'price_usd', e.target.value)}
-                                aria-label={`Preço da cor ${cl.code} (vazio herda do modelo)`}
+                                onChange={v => updColor(it.id, idx, 'price_usd', v)}
+                                ariaLabel={`Preço da cor ${cl.code} (vazio herda do modelo)`}
                                 style={{
                                   width: '100%', border: 'none', outline: 'none', background: 'transparent',
                                   fontSize: 13, fontWeight: hasCustom ? 700 : 400, textAlign: 'right',
@@ -1280,42 +1299,18 @@ export function OrderCreator({ order = null, prefill = null, factories, products
               )
             })()}
 
-            {/* Resumo tipo planilha da fábrica */}
-            <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginTop: 6 }}>
-              {(f.items || []).map(it => {
-                const info = modelInfo(it)
-                const pu = parseFloat(it.price_usd) || 0
-                const withQty = (it.colors || []).filter(c => Number(c.qty || 0) > 0)
-                if (withQty.length === 0) return null
-                return (
-                  <div key={it.id} style={{ display: 'flex', gap: 12, padding: 12, borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
-                    <div style={{ width: 64, height: 84, borderRadius: 8, overflow: 'hidden', background: 'var(--bg)', flexShrink: 0 }}>
-                      {info.photo && <img src={info.photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}>{UC(info.name)} {info.code && <span className="text-muted" style={{ fontSize: 11, fontFamily: 'monospace' }}>· {info.code}</span>}</div>
-                      <table style={{ width: '100%', fontSize: 12, marginTop: 6, borderCollapse: 'collapse' }}>
-                        <tbody>
-                          {withQty.map((c, i) => {
-                            const cp = c.price_usd != null && c.price_usd !== '' ? parseFloat(c.price_usd) : pu
-                            return (
-                              <tr key={i} style={{ borderTop: i > 0 ? '1px solid var(--border-light, var(--border))' : 'none' }}>
-                                <td style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <ColorSwatch code={c.code} colors={colors} size="xs" /> {c.code}
-                                </td>
-                                <td style={{ textAlign: 'center', width: 60 }}>{c.qty}</td>
-                                {showPrices && <td style={{ textAlign: 'right', width: 70 }}>{cp > 0 ? fmt$(cp) : '—'}</td>}
-                                {showPrices && <td style={{ textAlign: 'right', width: 80, fontWeight: 600 }}>{cp > 0 ? fmt$(cp * Number(c.qty || 0)) : '—'}</td>}
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+            {/* v13.78 — revisão com preços EDITÁVEIS: FOB e valor final da trading
+                por cor, ali mesmo, salvos junto com o pedido */}
+            <ReviewPriceTable
+              items={f.items || []}
+              colors={colors}
+              modelInfo={modelInfo}
+              showPrices={showPrices}
+              conversionFactor={f.conversion_factor}
+              rate={effRate}
+              onItemField={updItem}
+              onColorField={updColor}
+            />
 
             <div className="form-group" style={{ marginTop: 12 }}>
               <label className="field-label">
@@ -1341,8 +1336,8 @@ export function OrderCreator({ order = null, prefill = null, factories, products
           {showPrices && totals.landed != null && totals.fob > 0 && (
             <span
               className="text-muted"
-              title={`FOB ${fmt$(totals.fob)} × fator ${effFactor} × US$ ${effRate.toFixed(2)} — estimativa de quanto essas peças custam chegando no Brasil (ajuste fator/dólar no topo)`}
-            >≈ <strong style={{ color: 'var(--text)' }}>{fmtR$(totals.landed)}</strong> no Brasil</span>
+              title={`Total da compra: valor final da trading onde já foi lançado, e FOB × fator ${formatFixedBR(effFactor)} no resto. Em reais pelo dólar ${formatFixedBR(effRate)} (ajuste fator e dólar no topo).`}
+            >compra <strong style={{ color: 'var(--text)' }}>{fmt$(totals.total)}</strong>{!totals.confirmedAll && ' (estimada)'} ≈ <strong style={{ color: 'var(--text)' }}>{fmtR$(totals.landed)}</strong></span>
           )}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>

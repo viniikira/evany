@@ -14,7 +14,8 @@
 //   • Comprovante abre dentro do sistema (ReceiptViewer).
 
 import { useState, useMemo } from 'react'
-import { parseBR, formatMoneyBR, formatRateBR, resolveAmounts, sortPaymentsChrono, summarizePayments, isEmptyPayment, validatePayment } from '../../lib/payments'
+import { formatMoneyBR, formatRateBR, resolveAmounts, sortPaymentsChrono, summarizePayments, isEmptyPayment, validatePayment } from '../../lib/payments'
+import { MoneyInput } from '../MoneyInput'
 import { formatDate } from '../../lib/utils'
 import '../../styles/payments.css'
 
@@ -150,22 +151,19 @@ export function PaymentsSection({
 // ═════════════════════════════════════════════════════════════
 function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubmit, onCancel }) {
   const [date, setDate] = useState(initial.payment_date || '')
-  const [brlStr, setBrl] = useState(Number(initial.amount_brl) > 0 ? formatMoneyBR(Number(initial.amount_brl)) : '')
-  const [rateStr, setRate] = useState(Number(initial.rate_paid) > 0 ? formatRateBR(Number(initial.rate_paid)) : '')
+  // v13.78 — campos estilo calculadora (MoneyInput): guardam número direto
+  const [brlVal, setBrl] = useState(Number(initial.amount_brl) > 0 ? Number(initial.amount_brl) : null)
+  const [rateVal, setRate] = useState(Number(initial.rate_paid) > 0 ? Number(initial.rate_paid) : null)
   // Se o pagamento antigo não tem câmbio mas tem dólar, começa no modo "digitar em dólar"
   const startUsd = !(Number(initial.rate_paid) > 0) && Number(initial.amount_usd) > 0
   const [usdMode, setUsdMode] = useState(startUsd)
-  const [usdStr, setUsd] = useState(Number(initial.amount_usd) > 0 ? formatMoneyBR(Number(initial.amount_usd)) : '')
+  const [usdVal, setUsd] = useState(Number(initial.amount_usd) > 0 ? Number(initial.amount_usd) : null)
   const [bank, setBank] = useState(initial.bank || '')
   const [file, setFile] = useState(null)
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
 
-  const v = {
-    brl: parseBR(brlStr),
-    rate: parseBR(rateStr, { money: false }),
-    usd: parseBR(usdStr),
-  }
+  const v = { brl: brlVal, rate: rateVal, usd: usdVal }
   const r = usdMode
     ? resolveAmounts({ brl: v.brl, usd: v.usd, rate: null, lastEdited: 'usd' })
     : resolveAmounts({ brl: v.brl, rate: v.rate, usd: null, lastEdited: 'rate' })
@@ -196,36 +194,23 @@ function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubm
         </label>
         <label className="pay-field">
           <span>Valor pago em reais</span>
-          <div className="pay-input-prefix">
-            <i>R$</i>
-            <input
-              inputMode="decimal" placeholder="0,00" value={brlStr}
-              onChange={e => setBrl(e.target.value)}
-              onBlur={() => { const n = parseBR(brlStr); if (n != null) setBrl(formatMoneyBR(n)) }}
-              autoFocus={!initial.amount_brl}
-            />
-          </div>
+          <MoneyInput
+            className="pay-money" prefix="R$" value={brlVal} onChange={setBrl}
+            autoFocus={!initial.amount_brl} ariaLabel="Valor pago em reais"
+          />
         </label>
         {!usdMode ? (
           <label className="pay-field">
             <span>Câmbio do dia</span>
-            <input
-              inputMode="decimal" placeholder="ex.: 5,01" value={rateStr}
-              onChange={e => setRate(e.target.value)}
-              onBlur={() => { const n = parseBR(rateStr, { money: false }); if (n != null) setRate(formatRateBR(n)) }}
+            <MoneyInput
+              className="pay-money" value={rateVal} onChange={setRate} money={false}
+              placeholder="0,00" ariaLabel="Câmbio do dia" title="Digite só os números: 501 vira 5,01"
             />
           </label>
         ) : (
           <label className="pay-field">
             <span>Valor em dólar</span>
-            <div className="pay-input-prefix">
-              <i>US$</i>
-              <input
-                inputMode="decimal" placeholder="0,00" value={usdStr}
-                onChange={e => setUsd(e.target.value)}
-                onBlur={() => { const n = parseBR(usdStr); if (n != null) setUsd(formatMoneyBR(n)) }}
-              />
-            </div>
+            <MoneyInput className="pay-money" prefix="US$" value={usdVal} onChange={setUsd} ariaLabel="Valor em dólar" />
           </label>
         )}
         <div className="pay-field result">

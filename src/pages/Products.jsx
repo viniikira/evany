@@ -20,6 +20,7 @@ import { useStickyFilter, clearStickyFilters } from '../lib/hooks'
 import { uid, formatDate, UC } from '../lib/utils'
 import { trackAction } from '../lib/analytics'
 import { log } from '../lib/logger'
+import { MoneyInput } from '../components/MoneyInput'
 import { shopifyCoverageDays, coverageLabel } from '../lib/shopifySlim'
 import {
   FINISH, REP_TYPES, REP_SIZES, REP_ACAB, HTYPES, HLENS, MATERIALS,
@@ -1110,7 +1111,7 @@ function ProductModal({ product, collections, factories, colors, names, existing
             {perm.prices && (
               <div className="form-group">
                 <label className="field-label">Preço USD</label>
-                <input className="field" type="number" step="0.01" value={f.price_usd || ''} onChange={e => s('price_usd', e.target.value)} />
+                <MoneyInput prefix="US$" value={f.price_usd || ''} onChange={v => s('price_usd', v ?? '')} ariaLabel="Preço USD" />
               </div>
             )}
           </div>
@@ -1130,7 +1131,7 @@ function ProductModal({ product, collections, factories, colors, names, existing
                   {factories.map(fa => <option key={fa.id} value={fa.name}>{fa.name}</option>)}
                 </select>
                 <input className="field field-sm" placeholder="Código" value={sp.factory_code || ''} onChange={e => updSupp(sp.id, 'factory_code', e.target.value)} />
-                <input className="field field-sm" type="number" step="0.01" placeholder="USD" value={sp.price_usd || ''} onChange={e => updSupp(sp.id, 'price_usd', e.target.value)} />
+                <MoneyInput className="field field-sm" placeholder="USD" value={sp.price_usd || ''} onChange={v => updSupp(sp.id, 'price_usd', v ?? '')} ariaLabel="Preço USD do fornecedor" />
                 <button className="btn-icon text-danger" onClick={() => rmSupp(sp.id)} aria-label="Remover fornecedor">✕</button>
               </div>
             ))}

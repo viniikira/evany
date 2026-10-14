@@ -15,6 +15,8 @@ import { Modal, MH, MB, MF, SaveButton } from '../ui'
 import { ColorSwatch } from '../ColorSwatch'
 import { computeOrderLines, DEFAULT_TRADING_FACTOR } from '../../lib/financial'
 import { UC } from '../../lib/utils'
+import { MoneyInput } from '../MoneyInput'
+import { formatFixedBR } from '../../lib/moneyMask'
 
 const fmt$ = (n) => '$' + (Math.round((n || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtR$ = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR')
@@ -130,14 +132,14 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
         {/* Atalho: aplicar fator nas vazias */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 10px', background: 'var(--bg)', borderRadius: 8, marginBottom: 12 }}>
           <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>Atalho — aplicar fator nas linhas vazias:</span>
-          <input
+          <MoneyInput
             className="field field-sm"
-            type="number" step="0.01" min="1"
-            placeholder={String(DEFAULT_TRADING_FACTOR)}
+            placeholder={formatFixedBR(DEFAULT_TRADING_FACTOR)}
             value={bulkFactor}
-            onChange={e => setBulkFactor(e.target.value)}
+            onChange={v => setBulkFactor(v ?? '')}
             style={{ width: 80 }}
-            aria-label="Fator pra aplicar nas linhas vazias"
+            ariaLabel="Fator pra aplicar nas linhas vazias"
+            title="Digite só os números: 165 vira 1,65"
           />
           <button className="btn btn-outline btn-sm" onClick={applyBulkFactor} disabled={!(parseFloat(bulkFactor) > 0)}>
             Aplicar nas vazias
@@ -192,24 +194,24 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
                 {/* FOB base do produto — editável (v13.70) */}
                 <div style={{ width: 74, display: 'flex', alignItems: 'center', gap: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '0 6px', height: 30, background: 'var(--surface)' }}>
                   <span style={{ fontSize: 10, color: 'var(--text-muted, #6b7280)' }}>$</span>
-                  <input
-                    type="number" step="0.01" min="0"
+                  <MoneyInput
+                    className=""
                     value={it.price_usd_snapshot ?? it.price_usd ?? ''}
-                    onChange={e => setItemFob(it.id, e.target.value)}
-                    aria-label={`FOB base de ${info.name}`}
+                    onChange={v => setItemFob(it.id, v)}
+                    ariaLabel={`FOB base de ${info.name}`}
                     placeholder="—"
-                    style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 12, color: 'var(--text)' }}
+                    style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 12, color: 'var(--text)', padding: 0 }}
                   />
                 </div>
                 <div style={{ width: 112, display: 'flex', alignItems: 'center', gap: 2, border: `1px solid ${itemFinalNum > 0 ? '#059669' : 'var(--border)'}`, borderRadius: 8, padding: '0 8px', height: 30, background: itemFinalNum > 0 ? '#F0FDF4' : 'var(--surface)' }}>
                   <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>$</span>
-                  <input
-                    type="number" step="0.01" min="0"
+                  <MoneyInput
+                    className=""
                     value={it.final_price_usd ?? ''}
-                    onChange={e => setItemFinal(it.id, e.target.value)}
-                    aria-label={`Valor final base de ${info.name}`}
+                    onChange={v => setItemFinal(it.id, v)}
+                    ariaLabel={`Valor final base de ${info.name}`}
                     placeholder="—"
-                    style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 13, fontWeight: itemFinalNum > 0 ? 700 : 400, color: 'var(--text)' }}
+                    style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 13, fontWeight: itemFinalNum > 0 ? 700 : 400, color: 'var(--text)', padding: 0 }}
                   />
                 </div>
                 <div style={{ width: 52, textAlign: 'center', fontSize: 11, fontWeight: 700, color: itemMult ? (itemMult > 2 ? '#B45309' : '#059669') : 'var(--text-muted, #6b7280)' }}>
@@ -257,28 +259,28 @@ export function TradingValuesModal({ order, products = [], colors = [], rate, on
                   {/* FOB da linha — editável; vazio herda o do produto (v13.70) */}
                   <div style={{ width: 74, display: 'flex', alignItems: 'center', gap: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '0 6px', height: 30, background: 'var(--surface)' }}>
                     <span style={{ fontSize: 10, color: 'var(--text-muted, #6b7280)' }}>$</span>
-                    <input
-                      type="number" step="0.01" min="0"
+                    <MoneyInput
+                      className=""
                       value={isColor ? (row.c.price_usd ?? '') : (it.price_usd_snapshot ?? it.price_usd ?? '')}
-                      placeholder={isColor && fobItem > 0 ? fobItem.toFixed(2) : '—'}
-                      onChange={e => isColor ? setColorFob(it.id, row.idx, e.target.value) : setItemFob(it.id, e.target.value)}
-                      aria-label={`FOB ${isColor ? 'da cor ' + row.c.code : 'do item'} ${info.name}`}
+                      placeholder={isColor && fobItem > 0 ? formatFixedBR(fobItem) : '—'}
+                      onChange={v => isColor ? setColorFob(it.id, row.idx, v) : setItemFob(it.id, v)}
+                      ariaLabel={`FOB ${isColor ? 'da cor ' + row.c.code : 'do item'} ${info.name}`}
                       title={isColor ? 'Vazio herda o FOB do produto' : undefined}
-                      style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 12, color: 'var(--text)' }}
+                      style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 12, color: 'var(--text)', padding: 0 }}
                     />
                   </div>
                   <div style={{ width: 112, display: 'flex', alignItems: 'center', gap: 2, border: `1px solid ${hasOwn ? '#059669' : 'var(--border)'}`, borderRadius: 8, padding: '0 8px', height: 30, background: hasOwn ? '#F0FDF4' : 'var(--surface)' }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>$</span>
-                    <input
-                      type="number" step="0.01" min="0"
+                    <MoneyInput
+                      className=""
                       value={hasOwn ? ownFinal : ''}
-                      placeholder={inherited ? parseFloat(it.final_price_usd).toFixed(2) : '—'}
-                      onChange={e => isColor
-                        ? setColorFinal(it.id, row.idx, e.target.value)
-                        : setItemFinal(it.id, e.target.value)}
-                      aria-label={`Valor final ${isColor ? 'da cor ' + row.c.code : 'do item'} ${info.name}`}
+                      placeholder={inherited ? formatFixedBR(parseFloat(it.final_price_usd)) : '—'}
+                      onChange={v => isColor
+                        ? setColorFinal(it.id, row.idx, v)
+                        : setItemFinal(it.id, v)}
+                      ariaLabel={`Valor final ${isColor ? 'da cor ' + row.c.code : 'do item'} ${info.name}`}
                       title={inherited ? `Herdando ${fmt$(parseFloat(it.final_price_usd))} do item — digite pra sobrescrever` : undefined}
-                      style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 13, fontWeight: hasOwn ? 700 : 400, color: 'var(--text)' }}
+                      style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', textAlign: 'right', fontSize: 13, fontWeight: hasOwn ? 700 : 400, color: 'var(--text)', padding: 0 }}
                     />
                   </div>
                   <div style={{ width: 52, textAlign: 'center', fontSize: 11, fontWeight: 700, color: mult ? (mult > 2 ? '#B45309' : '#059669') : 'var(--text-muted, #6b7280)' }}>

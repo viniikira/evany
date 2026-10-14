@@ -108,3 +108,12 @@
 .rv-pdf { width: 100%; height: calc(100vh - 160px); border: 0; background: #fff }
 .rv-msg { color: var(--text-2); font-size: 14px }
 .rv-msg.bad { color: var(--bad) }
+
+/* v13.78 — campos estilo calculadora */
+.pay-money {
+  font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; width: 100%; min-height: 36px;
+  font-variant-numeric: tabular-nums;
+}
+input.pay-money { padding: 7px 10px }
+.pay-money:focus, .pay-money:focus-within { border-color: var(--primary); outline: none }

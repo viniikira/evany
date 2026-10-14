@@ -8,6 +8,7 @@
 // convertida pela cotação de projeção do pedido.
 
 import { useState } from 'react'
+import { MoneyInput } from '../MoneyInput'
 
 const fmtR$ = (n) => 'R$ ' + (Math.round(n || 0)).toLocaleString('pt-BR')
 
@@ -104,14 +105,14 @@ export function ReservesSection({ reserves = [], balance, onSave }) {
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: 6, alignItems: 'end' }}>
             <div>
               <label className="text-muted" style={{ fontSize: 10 }}>Valor (R$)</label>
-              <input
-                className="field field-sm" type="number" step="0.01" min="0" autoFocus
-                value={draft.amount_brl}
-                onChange={e => setDraft(d => ({ ...d, amount_brl: e.target.value }))}
-                onKeyDown={e => { if (e.key === 'Enter') addReserve() }}
-                placeholder="30000"
-                aria-label="Valor guardado em reais"
-              />
+              <div onKeyDown={e => { if (e.key === 'Enter') addReserve() }}>
+                <MoneyInput
+                  className="field field-sm" autoFocus
+                  value={draft.amount_brl}
+                  onChange={v => setDraft(d => ({ ...d, amount_brl: v ?? '' }))}
+                  ariaLabel="Valor guardado em reais"
+                />
+              </div>
             </div>
             <div>
               <label className="text-muted" style={{ fontSize: 10 }}>Banco / onde está</label>

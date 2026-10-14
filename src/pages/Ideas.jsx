@@ -3,6 +3,7 @@
 // Inclui IdeasPage + IdeaModal (a página mais complexa fora de Orders/Products)
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { MoneyInput } from '../components/MoneyInput'
 import { Modal, MH, MB, MF, Lightbox, useConfirm, useToast, SkeletonList, ClearFiltersButton } from '../components/ui'
 import { NameAutocomplete } from '../components/NameAutocomplete'
 import { freeNames, findNameConflict, specTemplateFrom } from '../lib/creationAssist'
@@ -634,7 +635,7 @@ function IdeaModal({ idea, onSave, onDelete, onClose, onConvertToProduct, collec
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="field-label">Preço USD estimado</label>
-                <input className="field" type="number" step="0.01" value={f.price_usd || ''} onChange={e => s('price_usd', e.target.value)} />
+                <MoneyInput prefix="US$" value={f.price_usd || ''} onChange={v => s('price_usd', v ?? '')} ariaLabel="Preço USD estimado" />
               </div>
             </div>
           </div>

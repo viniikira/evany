@@ -26,7 +26,7 @@ import { ArrivalEditor } from './ArrivalEditor'
 import { toastError } from '../../lib/errors'
 import { log } from '../../lib/logger'
 
-export function OrderDetail({ order: o, products, colors = [], perm, rate, user, onClose, onEdit, onDelete, onStatus, onArrivalSave, onRefresh, onRecalcFOB, onDuplicate, zIndex, readOnly = false }) {
+export function OrderDetail({ order: o, products, colors = [], perm, rate, user, onClose, onEdit, onEditPrices, onDelete, onStatus, onArrivalSave, onRefresh, onRecalcFOB, onDuplicate, zIndex, readOnly = false }) {
   const st = ORDER_ST.find(s => s.id === o.status)
   const [lb, setLb] = useState(null)
   const toast = useToast()
@@ -244,13 +244,14 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 title="Abre a mesa de criação pré-carregada com estes itens — nada é criado até você salvar"
               >📋 Duplicar</button>
             )}
-            {/* v13.67 — lançar os valores finais que a trading mandou */}
+            {/* v13.78 — preços (FOB e final da trading) abrem DIRETO na revisão
+                editável do pedido; sem ela, cai no modal antigo */}
             {perm.prices && !readOnly && (
               <button
                 className="btn btn-outline btn-sm"
-                onClick={() => setTradingModal(true)}
-                title="Lançar o valor final por peça que a importadora passou (é o que define quanto você deve)"
-              >💵 Valores da trading{!bal.isFullyConfirmed && bal.total > 0 ? ' ⚠' : ''}</button>
+                onClick={() => (onEditPrices ? onEditPrices() : setTradingModal(true))}
+                title="Colocar ou corrigir o FOB e o valor final da trading de cada cor"
+              >💵 Preços e trading{!bal.isFullyConfirmed && bal.total > 0 ? ' ⚠' : ''}</button>
             )}
             {/* v13.47 Planilha da fábrica — contém FOB, só pra quem vê preços */}
             {perm.prices && (
@@ -521,7 +522,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
 
                   {!bal.isFullyConfirmed && (
                     <div style={{ marginTop: 8, padding: '7px 10px', background: '#FFFBEB', border: '1px dashed #FBBF24', borderRadius: 6, fontSize: 11, color: '#92400E' }}>
-                      ⚠️ Parte do total é <strong>estimativa</strong> (FOB × fator {(parseFloat(o.conversion_factor) || 1.65)}). Lance os valores em <strong>💵 Valores da trading</strong> pra ter o número exato.
+                      ⚠️ Parte do total é <strong>estimativa</strong> (FOB × fator {(parseFloat(o.conversion_factor) || 1.65)}). Lance os valores em <strong>💵 Preços e trading</strong> pra ter o número exato.
                     </div>
                   )}
 
