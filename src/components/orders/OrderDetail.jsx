@@ -8,12 +8,14 @@ import { useState } from 'react'
 import { Modal, MH, MB, MF, Lightbox, useConfirm, useToast } from '../ui'
 import { ColorSwatch } from '../ColorSwatch'
 import { OrderTimeline } from '../OrderTimeline'
-import { PayRow } from './PayRow'
+import { PaymentsSection } from './PaymentsSection'
+import { ReceiptViewer } from './ReceiptViewer'
+import { formatMoneyBR, formatRateBR } from '../../lib/payments'
 import { addPayment, updatePayment, deletePayment, updateOrder } from '../../lib/data/orders'
 import { computeOrderBalance } from '../../lib/financial'
 import { TradingValuesModal } from './TradingValuesModal'
 import { ReservesSection } from './ReservesSection'
-import { uploadReceipt, getReceiptSignedUrl, deleteReceipt } from '../../lib/storage'
+import { uploadReceipt, deleteReceipt } from '../../lib/storage'
 import { generateOrderPDF } from '../../lib/pdf'
 import { generateFactorySheet } from '../../lib/factorySheet'
 import { trackAction } from '../../lib/analytics'
@@ -89,7 +91,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
       } catch (e) { toastError(toast, e) }
       return
     }
-    const falta = remainUsd > 0.01 ? `Ainda faltam $ ${remainUsd.toFixed(2)} pelos pagamentos registrados.` : 'Os pagamentos registrados já cobrem o total.'
+    const falta = remainUsd > 0.01 ? `Ainda faltam US$ ${formatMoneyBR(remainUsd)} pelos pagamentos registrados.` : 'Os pagamentos registrados já cobrem o total.'
     const ok = await confirm({
       title: 'Marcar como PAGO integralmente?',
       message: `${falta}\n\nUse quando o pedido já foi pago (inclusive fora do sistema) e você não quer lançar os pagamentos antigos um por um.`,
@@ -108,7 +110,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
     } catch (e) { toastError(toast, e) }
   }
   
-  const isM = o.status === 'manufacturing' || o.status === 'in_transit' || o.status === 'completed'
+  // v13.77 — inclui "em revisão": o sinal pra trading costuma sair antes da fabricação
+  const isM = o.status === 'sent' || o.status === 'manufacturing' || o.status === 'in_transit' || o.status === 'completed'
 
   // Adicionar pagamento (só admin)
   const [addingPay, setAddingPay] = useState(false)
@@ -130,78 +133,41 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
     }
   }
 
-  const addPay = async () => {
+  // v13.77 — pagamento novo só é gravado no "Salvar" do formulário (antes o
+  // botão criava um registro vazio no banco antes de ela digitar)
+  const createPay = async (data, file) => {
     try {
-      await addPayment(o.id, {
-        payment_date: null, amount_usd: null, rate_paid: null, amount_brl: null, bank: null,
-      })
+      const created = await addPayment(o.id, data)
+      if (file && created?.id) {
+        const { path } = await uploadReceipt(file, o.id)
+        await updatePayment(created.id, { receipt_url: path })
+      }
+      setAddingPay(false)
       await onRefresh()
-      toast.push('Pagamento adicionado. Preencha os dados.', { kind: 'success' })
+      toast.push(`Pagamento de R$ ${formatMoneyBR(data.amount_brl || 0)} registrado`, { kind: 'success' })
+      return true
     } catch (e) {
-      // Loga erro completo no console pra debug
-      log.error('[KIRA] Erro ao adicionar pagamento:', e)
-      toastError(toast, e, 'Não foi possível adicionar pagamento')
+      log.error('[KIRA] Erro ao registrar pagamento:', e)
+      toastError(toast, e, 'Não foi possível registrar o pagamento')
+      return false
     }
   }
 
-  const savePay = async (payId, patch) => {
+  const editPay = async (payId, data) => {
     try {
-      const isUsdChange = Object.prototype.hasOwnProperty.call(patch, 'amount_usd')
-      const isRateChange = Object.prototype.hasOwnProperty.call(patch, 'rate_paid')
-      const isBrlChange = Object.prototype.hasOwnProperty.call(patch, 'amount_brl')
-      
-      const current = (o.payments || []).find(p => p.id === payId) || {}
-      const num = (v) => {
-        if (v == null || v === '') return null
-        const n = parseFloat(v)
-        return isNaN(n) ? null : n
-      }
-      
-      // Bi-direcional inteligente (Opção A: último editado manda):
-      //   - Edita USD + tem câmbio → calcula BRL
-      //   - Edita BRL + tem câmbio → calcula USD
-      //   - Edita só câmbio → recalcula o lado MENOS preenchido recentemente
-      //     (heurística: se BRL tem valor, recalcula USD; senão recalcula BRL)
-      
-      if (isUsdChange && !isBrlChange) {
-        // Editou USD: se tem câmbio (novo ou existente), calcula BRL
-        const usd = num(patch.amount_usd)
-        const rate = num(isRateChange ? patch.rate_paid : current.rate_paid)
-        if (usd != null && rate != null) {
-          patch.amount_brl = +(usd * rate).toFixed(2)
-        }
-      } else if (isBrlChange && !isUsdChange) {
-        // Editou BRL: se tem câmbio, calcula USD
-        const brl = num(patch.amount_brl)
-        const rate = num(isRateChange ? patch.rate_paid : current.rate_paid)
-        if (brl != null && rate != null && rate > 0) {
-          patch.amount_usd = +(brl / rate).toFixed(2)
-        }
-      } else if (isRateChange && !isUsdChange && !isBrlChange) {
-        // Editou só câmbio: recalcula o lado oposto do último que estava preenchido.
-        // Heurística: se BRL tem valor, recalcula USD a partir dele (cenário comum:
-        // "paguei R$ tantos no banco, qual é o USD efetivo?"). Senão recalcula BRL.
-        const rate = num(patch.rate_paid)
-        const brl = num(current.amount_brl)
-        const usd = num(current.amount_usd)
-        if (rate != null && rate > 0) {
-          if (brl != null && brl > 0) {
-            patch.amount_usd = +(brl / rate).toFixed(2)
-          } else if (usd != null && usd > 0) {
-            patch.amount_brl = +(usd * rate).toFixed(2)
-          }
-        }
-      }
-      
-      await updatePayment(payId, patch)
+      await updatePayment(payId, data)
       await onRefresh()
-    } catch (e) { toastError(toast, e) }
+      toast.push('Pagamento atualizado', { kind: 'success' })
+      return true
+    } catch (e) { toastError(toast, e); return false }
   }
 
   const rmPay = async (pay) => {
     const ok = await confirm({
       title: 'Remover pagamento?',
-      message: pay.amount_usd ? `Pagamento de US$ ${pay.amount_usd} será removido.` : 'Este pagamento será removido.',
+      message: Number(pay.amount_brl) > 0
+        ? `O pagamento de R$ ${formatMoneyBR(Number(pay.amount_brl))}${pay.payment_date ? ` (${formatDate(pay.payment_date, 'full')})` : ''} será removido.`
+        : 'Este pagamento será removido.',
       danger: true,
       confirmLabel: 'Remover',
     })
@@ -219,21 +185,20 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
     const pay = (o.payments || []).find(p => p.id === payId)
     if (!pay?.payment_date) {
       toast.push('Preencha a data do pagamento antes de enviar o comprovante', { kind: 'error', duration: 6000 })
-      return
+      return false
     }
     try {
       const { path } = await uploadReceipt(file, o.id)
-      await savePay(payId, { receipt_url: path })
+      if (pay.receipt_url) await deleteReceipt(pay.receipt_url).catch(() => {})
+      await updatePayment(payId, { receipt_url: path })
+      await onRefresh()
       toast.push('Comprovante salvo', { kind: 'success' })
-    } catch (e) { toastError(toast, e) }
+      return path
+    } catch (e) { toastError(toast, e); return false }
   }
 
-  const viewReceipt = async (path) => {
-    try {
-      const url = await getReceiptSignedUrl(path)
-      window.open(url, '_blank')
-    } catch (e) { toastError(toast, e) }
-  }
+  // v13.77 — comprovante abre DENTRO do sistema (antes: aba nova do navegador)
+  const [viewer, setViewer] = useState(null)   // { payId, path, title, subtitle }
 
   return (
     <>
@@ -246,6 +211,18 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
           rate={rate}
           onSave={saveTradingValues}
           onClose={() => setTradingModal(false)}
+        />
+      )}
+      {viewer && (
+        <ReceiptViewer
+          path={viewer.path}
+          title={viewer.title}
+          subtitle={viewer.subtitle}
+          onClose={() => setViewer(null)}
+          onReplace={async (file) => {
+            const path = await uploadPayReceipt(viewer.payId, file)
+            if (path) setViewer(v => v ? { ...v, path } : v)
+          }}
         />
       )}
       <Modal onClose={onClose} width={750} allowOutsideClose zIndex={zIndex}>
@@ -397,8 +374,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                           </td>
                           <td style={{ textAlign: 'center' }}>{cl.qty || 0}</td>
                           {isM && perm.prices && (
-                            <td title={hasCustom ? `Preço próprio desta cor (item é $${itemPrice.toFixed(2)})` : undefined}>
-                              {effective > 0 ? '$' + effective.toFixed(2) : '—'}
+                            <td title={hasCustom ? `Preço próprio desta cor (item é US$ ${formatMoneyBR(itemPrice)})` : undefined}>
+                              {effective > 0 ? 'US$ ' + formatMoneyBR(effective) : '—'}
                               {hasCustom && <span style={{ color: '#F59E0B', marginLeft: 3, fontWeight: 700 }} title="Preço customizado">*</span>}
                             </td>
                           )}
@@ -411,7 +388,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                       <td><strong>{name}</strong></td>
                       <td>—</td>
                       <td style={{ textAlign: 'center' }}>{it.quantity || 0}</td>
-                      {isM && perm.prices && <td>{itemPrice > 0 ? '$' + itemPrice.toFixed(2) : '—'}</td>}
+                      {isM && perm.prices && <td>{itemPrice > 0 ? 'US$ ' + formatMoneyBR(itemPrice) : '—'}</td>}
                     </tr>
                   )
                 })}
@@ -421,16 +398,16 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16, padding: '8px 14px', background: 'var(--bg)', borderRadius: 6, marginTop: 4 }}>
             <strong style={{ color: 'var(--primary)' }}>Total: {totalQty} peças</strong>
-            {isM && perm.prices && budgetTotal > 0 && <strong style={{ color: '#F59E0B' }}>FOB: $ {budgetTotal.toFixed(2)}</strong>}
+            {isM && perm.prices && budgetTotal > 0 && <strong style={{ color: '#F59E0B' }}>FOB: US$ {formatMoneyBR(budgetTotal)}</strong>}
           </div>
 
           {o.notes && <div style={{ padding: 10, background: '#f9fafb', borderRadius: 6, fontSize: 13, marginTop: 8 }}>{o.notes}</div>}
 
           {/* Pagamentos - só admin */}
           {isM && perm.payments && (
-            <div style={{ marginTop: 14, padding: 14, background: 'linear-gradient(135deg,#FFFBEB,#FEF9F0)', borderRadius: 10, border: '1px solid #FDE68A' }}>
+            <div style={{ marginTop: 14, padding: 16, background: 'var(--surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
-                <div className="card-title" style={{ margin: 0, color: '#92400E' }}>💰 Pagamentos ({(o.payments || []).length})</div>
+                <div className="card-title" style={{ margin: 0 }}>Pagamentos</div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {/* v13.69 — quitar pedidos antigos pagos fora do sistema */}
                   {bal.total > 0 && (
@@ -442,7 +419,6 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                         : 'Marcar como pago integralmente (pra pedidos antigos já pagos fora do sistema)'}
                     >{bal.isManuallySettled ? '↩ Reabrir cobrança' : '✓ Marcar como pago'}</button>
                   )}
-                  <button className="btn btn-outline btn-sm" onClick={addPay}>+ Pagamento</button>
                 </div>
               </div>
 
@@ -452,24 +428,28 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                   ✓ <strong>Pago integralmente</strong> — marcado em {formatDate(bal.settledAt, 'full')}.
                   {(o.payments || []).length === 0
                     ? ' Os pagamentos foram feitos fora do sistema.'
-                    : ` Registrados aqui: $ ${totalPaidUsd.toFixed(2)} de $ ${bal.total.toFixed(2)}.`}
+                    : ` Registrados aqui: US$ ${formatMoneyBR(totalPaidUsd)} de US$ ${formatMoneyBR(bal.total)}.`}
                   <span className="text-muted" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
                     Este pedido não entra mais no saldo em aberto do financeiro.
                   </span>
                 </div>
               )}
-              {(o.payments || []).map((p, i) => (
-                <PayRow
-                  key={p.id}
-                  payment={p}
-                  index={i}
-                  onSave={(patch) => savePay(p.id, patch)}
-                  onRemove={() => rmPay(p)}
-                  onUploadReceipt={(file) => uploadPayReceipt(p.id, file)}
-                  onViewReceipt={() => viewReceipt(p.receipt_url)}
-                />
-              ))}
-              {(o.payments || []).length === 0 && <p className="text-muted text-sm" style={{ textAlign: 'center' }}>Nenhum pagamento.</p>}
+              <PaymentsSection
+                payments={o.payments || []}
+                adding={addingPay}
+                onStartAdd={() => setAddingPay(true)}
+                onCancelAdd={() => setAddingPay(false)}
+                onCreate={createPay}
+                onUpdate={editPay}
+                onRemove={rmPay}
+                onAttach={uploadPayReceipt}
+                onViewReceipt={(p, number) => setViewer({
+                  payId: p.id,
+                  path: p.receipt_url,
+                  title: number ? `Comprovante do ${number}º pagamento` : 'Comprovante',
+                  subtitle: [p.payment_date && formatDate(p.payment_date, 'full'), Number(p.amount_brl) > 0 && `R$ ${formatMoneyBR(Number(p.amount_brl))}`, p.bank].filter(Boolean).join(' · '),
+                })}
+              />
 
               {/* v13.67 — painel medido contra o VALOR FINAL da trading */}
               {bal.total > 0 && (
@@ -483,7 +463,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                           ? <span style={{ color: '#166534', fontWeight: 700 }}> · valores confirmados pela trading</span>
                           : <span style={{ fontWeight: 700 }}> · ⚠ {bal.linesConfirmed}/{bal.linesTotal} linhas confirmadas (resto é estimativa)</span>}
                       </span>
-                      {avgRate > 0 && totalPaidUsd > 0 && <span>💱 câmbio médio R$ {avgRate.toFixed(4)}</span>}
+                      {avgRate > 0 && totalPaidUsd > 0 && <span>câmbio médio {formatRateBR(avgRate)}</span>}
                     </div>
                     <div style={{ height: 8, borderRadius: 5, background: '#FDE68A', overflow: 'hidden' }}>
                       <div style={{
@@ -499,14 +479,14 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
                     <div style={{ background: 'var(--surface)', padding: 10, borderRadius: 8, border: '1px solid #FDE68A' }}>
                       <div className="text-muted text-xs">FOB (FÁBRICA)</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>$ {bal.fobTotal.toFixed(2)}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>US$ {formatMoneyBR(bal.fobTotal)}</div>
                       {bal.multiplier && (
-                        <div style={{ fontSize: 11, color: '#92400E', marginTop: 2 }}>fator ×{bal.multiplier.toFixed(3)}</div>
+                        <div style={{ fontSize: 11, color: '#92400E', marginTop: 2 }}>fator ×{bal.multiplier.toFixed(2).replace('.', ',')}</div>
                       )}
                     </div>
                     <div style={{ background: '#F0FDF4', padding: 10, borderRadius: 8, border: '1px solid #86EFAC' }}>
                       <div className="text-xs" style={{ color: '#166534', fontWeight: 700 }}>TOTAL DA COMPRA</div>
-                      <div style={{ fontSize: 17, fontWeight: 800, marginTop: 2, color: '#166534' }}>$ {bal.total.toFixed(2)}</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, marginTop: 2, color: '#166534' }}>US$ {formatMoneyBR(bal.total)}</div>
                       {bal.projRate > 0 && (
                         <div style={{ fontSize: 11, color: '#166534', marginTop: 2 }}>
                           ≈ R$ {(bal.total * bal.projRate).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
@@ -515,7 +495,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                     </div>
                     <div style={{ background: 'var(--surface)', padding: 10, borderRadius: 8, border: '1px solid #FDE68A' }}>
                       <div className="text-muted text-xs">PAGO</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>$ {totalPaidUsd.toFixed(2)}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>US$ {formatMoneyBR(totalPaidUsd)}</div>
                       <div style={{ fontSize: 11, color: '#92400E', marginTop: 2 }}>
                         R$ {totalPaidBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
                       </div>
@@ -529,7 +509,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                         {bal.isSettled ? 'QUITADO' : 'FALTA PAGAR'}
                       </div>
                       <div style={{ fontSize: 17, fontWeight: 800, color: bal.isSettled ? '#059669' : '#DC2626', marginTop: 2 }}>
-                        $ {Math.max(0, remainUsd).toFixed(2)}
+                        US$ {formatMoneyBR(Math.max(0, remainUsd))}
                       </div>
                       {!bal.isSettled && remainBrl > 0 && (
                         <div style={{ fontSize: 12, fontWeight: 700, color: '#991B1B', marginTop: 2 }}>

@@ -3,7 +3,6 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Modal, useConfirm, useToast, SkeletonList } from '../components/ui'
 import { LeadTimePromptModal } from '../components/orders/LeadTimePromptModal'
 import { CompletionSummaryModal } from '../components/orders/CompletionSummaryModal'
-import { PayRow } from '../components/orders/PayRow'
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
 import { OrdersBoard } from '../components/orders/OrdersBoard'
@@ -1003,7 +1002,6 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
 
 // OrderDetail extraído pra src/components/orders/OrderDetail.jsx (v13.36)
 
-// PayRow extraído pra src/components/orders/PayRow.jsx (v13.36)
 
 // CompletionSummaryModal extraído pra src/components/orders/CompletionSummaryModal.jsx (v13.36)
 

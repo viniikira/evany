@@ -1,0 +1,110 @@
+/* ═══════════════════════════════════════════════════════════════════
+   v13.77 — PAGAMENTOS do pedido (pay-) e visualizador de comprovante (rv-)
+   Mesmo padrão de orders-board.css: Inter, números tabulares, neutro.
+   ═══════════════════════════════════════════════════════════════════ */
+.pay { display: flex; flex-direction: column; gap: 10px; font-variant-numeric: tabular-nums; color: var(--text) }
+.pay .num { text-align: right; white-space: nowrap }
+.pay .strong { font-weight: 600 }
+.pay-muted { color: var(--text-muted); font-style: normal }
+.pay-warn { color: var(--warn-ink); font-weight: 500 }
+
+.pay-btn {
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 12px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px;
+  text-decoration: none; transition: background .15s, border-color .15s;
+}
+.pay-btn:hover { background: var(--hover); border-color: var(--text-muted) }
+.pay-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff }
+.pay-btn.primary:hover { filter: brightness(1.1); background: var(--primary) }
+.pay-btn.danger { color: var(--bad) }
+.pay-btn.danger:hover { background: var(--bad-bg); border-color: #FCA5A5 }
+.pay-btn:disabled { opacity: .5; cursor: default }
+.pay-add { align-self: flex-start }
+.pay-link {
+  font: inherit; font-size: 13px; color: var(--primary); background: none; border: 0; padding: 0;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.pay-link.muted { color: var(--text-2) }
+
+.pay-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px;
+  color: var(--text-2); font-size: 14px; border: 1px dashed var(--border); border-radius: 10px;
+}
+
+/* Tabela */
+.pay-table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface) }
+.pay-row {
+  display: grid; align-items: center; gap: 12px; font-size: 13px;
+  grid-template-columns: 26px 80px minmax(96px, 1.2fr) 44px minmax(92px, 1fr) minmax(52px, .8fr) 52px 86px;
+  gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line);
+}
+.pay-head { border-top: 0; background: var(--hover); font-size: 12px; font-weight: 500; color: var(--text-2); padding-top: 8px; padding-bottom: 8px }
+.pay-n { color: var(--text-2); font-weight: 600 }
+.pay-bank { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.pay-bank em { color: var(--text-muted); font-style: normal }
+.pay-actions { display: flex; gap: 6px; justify-content: flex-end }
+.pay-total { background: var(--hover); font-weight: 500 }
+.pay-row.incomplete { background: var(--warn-bg); grid-template-columns: 28px minmax(0, 1fr) auto }
+.pay-btn.sm { font-size: 12px; padding: 3px 9px; border-radius: 7px }
+.pay-btn.icon { padding: 3px 7px; font-size: 13px; line-height: 1 }
+.pay-incomplete-msg { color: var(--warn-ink) }
+.pay-row-form { border-top: 1px solid var(--line); background: var(--hover); padding: 12px 14px }
+
+/* Formulário */
+.pay-new { border: 1px solid var(--border); border-radius: 10px; background: var(--hover); padding: 14px }
+.pay-form { display: flex; flex-direction: column; gap: 12px }
+.pay-form-title { font-size: 14px; font-weight: 600 }
+.pay-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px }
+.pay-field { display: flex; flex-direction: column; gap: 4px; min-width: 0 }
+.pay-field > span { font-size: 12px; font-weight: 500; color: var(--text-2) }
+.pay-field > span em { font-style: normal; color: var(--text-muted); font-weight: 400 }
+.pay-field input {
+  font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; width: 100%; outline: none;
+  font-variant-numeric: tabular-nums;
+}
+.pay-field input:focus { border-color: var(--primary) }
+.pay-field input[type="file"] { font-size: 12px; padding: 5px 6px }
+.pay-input-prefix { display: flex; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden }
+.pay-input-prefix:focus-within { border-color: var(--primary) }
+.pay-input-prefix i { font-style: normal; font-size: 13px; color: var(--text-2); padding: 0 0 0 10px }
+.pay-input-prefix input { border: 0; border-radius: 0 }
+.pay-field.result strong { font-size: 18px; font-weight: 600; line-height: 34px }
+.pay-field.result .pay-link { font-size: 12px; align-self: flex-start }
+.pay-formula { font-size: 13px; color: var(--text-2) }
+.pay-formula strong { color: var(--text) }
+.pay-error { font-size: 13px; color: var(--bad); background: var(--bad-bg); border-radius: 8px; padding: 8px 12px }
+.pay-form-actions { display: flex; gap: 8px; justify-content: flex-end }
+
+@media (max-width: 760px) {
+  .pay-head { display: none }
+  .pay-row { grid-template-columns: 34px 1fr 1fr; row-gap: 4px }
+  .pay-row > :nth-child(n+4) { grid-column: 2 / -1; text-align: left }
+  .pay-row .num { text-align: left }
+  .pay-actions { justify-content: flex-start }
+}
+
+/* ── Visualizador de comprovante ── */
+.rv-overlay {
+  position: fixed; inset: 0; z-index: 9000; background: rgba(20, 14, 18, .55);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.rv {
+  background: var(--surface); border-radius: 14px; width: min(960px, 100%); max-height: 100%;
+  display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.25);
+}
+.rv-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 18px; border-bottom: 1px solid var(--line);
+}
+.rv-head h3 { font-size: 15px; margin: 0 }
+.rv-head span { font-size: 13px; color: var(--text-2) }
+.rv-actions { display: flex; gap: 6px }
+.rv-body { flex: 1; overflow: auto; background: var(--hover); display: flex; align-items: center; justify-content: center; min-height: 320px }
+.rv-body img { max-width: 100%; max-height: calc(100vh - 160px); object-fit: contain; cursor: zoom-in; display: block }
+.rv-body.zoom { align-items: flex-start; justify-content: flex-start }
+.rv-body.zoom img { max-width: none; max-height: none; cursor: zoom-out }
+.rv-pdf { width: 100%; height: calc(100vh - 160px); border: 0; background: #fff }
+.rv-msg { color: var(--text-2); font-size: 14px }
+.rv-msg.bad { color: var(--bad) }

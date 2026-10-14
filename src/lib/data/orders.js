@@ -9,7 +9,9 @@ export async function listOrders() {
     // #18 Lixeira: por padrão, lista APENAS pedidos não deletados
     supabase.from('orders').select('*').is('deleted_at', null).order('created_at', { ascending: false }),
     supabase.from('order_items').select('*'),
-    supabase.from('payments').select('id, order_id, payment_date, amount_usd, rate_paid, amount_brl, bank, receipt_url, created_at'),
+    supabase.from('payments').select('id, order_id, payment_date, amount_usd, rate_paid, amount_brl, bank, receipt_url, created_at')
+      .order('payment_date', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true }),
   ])
   if (ordersRes.error) throw ordersRes.error
   if (itemsRes.error) throw itemsRes.error
