@@ -4,7 +4,7 @@
 // Modal de visualização/edição de pedido com timeline, pagamentos e status.
 // Usado tanto em Orders.jsx quanto em Products.jsx (via import).
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Modal, MH, MB, MF, Lightbox, useConfirm, useToast } from '../ui'
 import { ColorSwatch } from '../ColorSwatch'
 import { OrderTimeline } from '../OrderTimeline'
@@ -23,6 +23,7 @@ import { addLog as writeLog } from '../../lib/data/misc'
 import { ORDER_ST } from '../../lib/constants'
 import { UC, formatDate, parseDateLocal } from '../../lib/utils'
 import { ArrivalEditor } from './ArrivalEditor'
+import { NextStepBar } from './NextStepBar'
 import { toastError } from '../../lib/errors'
 import { log } from '../../lib/logger'
 
@@ -111,6 +112,26 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
   }
   
   // v13.77 — inclui "em revisão": o sinal pra trading costuma sair antes da fabricação
+  const nextStepExtra = (() => {
+    const DAY = 86400000
+    const today = new Date(new Date().toDateString()).getTime()
+    if (o.status === 'manufacturing' && o.promised_lead_days) {
+      const start = parseDateLocal(o.order_date || o.manufacturing_started_at)
+      if (start) {
+        const d = Math.max(0, Math.floor((Date.now() - start.getTime()) / DAY))
+        return d > o.promised_lead_days
+          ? `Atrasado ${d - o.promised_lead_days} dias (prazo de ${o.promised_lead_days}).`
+          : `Dia ${d} de ${o.promised_lead_days} do prazo.`
+      }
+    }
+    if (o.status === 'in_transit') {
+      const t = parseDateLocal(o.expected_arrival)?.getTime()
+      if (t == null) return 'Sem previsão de chegada — defina logo abaixo.'
+      const d = Math.round((t - today) / DAY)
+      return d < 0 ? `A previsão venceu há ${-d} dias. Já chegou?` : d === 0 ? 'Previsto pra hoje.' : `Previsto pra chegar em ${d} dias.`
+    }
+    return null
+  })()
   const isM = o.status === 'sent' || o.status === 'manufacturing' || o.status === 'in_transit' || o.status === 'completed'
 
   // Adicionar pagamento (só admin)
@@ -228,22 +249,6 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
       <Modal onClose={onClose} width={750} allowOutsideClose zIndex={zIndex}>
         <MH title={o.order_name || `Pedido · ${o.factory}`} onClose={onClose} actions={
           <>
-            {/* #FIX-1 Recalcular FOB com preços atuais — só em rascunho (snapshot é sagrado depois) */}
-            {perm.orders && !readOnly && o.status === 'draft' && onRecalcFOB && (
-              <button
-                className="btn btn-outline btn-sm"
-                onClick={onRecalcFOB}
-                title="Atualiza preços do pedido com base nos valores atuais do catálogo"
-              >🔄 Recalcular FOB</button>
-            )}
-            {/* v13.60 — Duplicar unificado: abre a mesa de criação pré-carregada */}
-            {perm.orders && !readOnly && onDuplicate && (
-              <button
-                className="btn btn-outline btn-sm"
-                onClick={onDuplicate}
-                title="Abre a mesa de criação pré-carregada com estes itens — nada é criado até você salvar"
-              >📋 Duplicar</button>
-            )}
             {/* v13.78 — preços (FOB e final da trading) abrem DIRETO na revisão
                 editável do pedido; sem ela, cai no modal antigo */}
             {perm.prices && !readOnly && (
@@ -262,8 +267,13 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 title="Gera o Excel com fotos no formato enviado à fábrica (modelos, cores, quantidades, FOB e seção COLORS)"
               >{exportingSheet ? '⏳ Gerando...' : '📊 Planilha Fábrica'}</button>
             )}
-            <button className="btn btn-outline btn-sm" onClick={() => { trackAction('export_pdf', { orderId: o.id, factory: o.factory }); generateOrderPDF(o, products) }} title="Documento interno de conferência (não é o que vai pra fábrica)">📄 PDF interno</button>
             {perm.orders && !readOnly ? <button className="btn btn-primary btn-sm" onClick={onEdit}>✏️ Editar</button> : null}
+            {/* v13.80 — o que é de vez em quando fica no "Mais" (o topo tinha 6 botões) */}
+            <MoreMenu items={[
+              perm.orders && !readOnly && onDuplicate && { label: '📋 Duplicar pedido', onClick: onDuplicate, title: 'Abre a mesa de criação com estes itens — nada é criado até salvar' },
+              { label: '📄 PDF interno de conferência', onClick: () => { trackAction('export_pdf', { orderId: o.id, factory: o.factory }); generateOrderPDF(o, products) } },
+              perm.orders && !readOnly && o.status === 'draft' && onRecalcFOB && { label: '🔄 Atualizar preços pelo catálogo', onClick: onRecalcFOB, title: 'Atualiza o FOB do pedido com os preços atuais do catálogo' },
+            ]} />
           </>
         } />
         <MB>
@@ -275,6 +285,16 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
             }}>
               👁️ <strong>Modo visualização.</strong> Pra editar, vá em <strong>Pedidos</strong>.
             </div>
+          )}
+          {perm.orders && !readOnly && (
+            <NextStepBar
+              order={o}
+              onStatus={onStatus}
+              onSheet={perm.prices ? exportFactorySheet : null}
+              onPrices={perm.prices && onEditPrices ? onEditPrices : null}
+              needsPrices={bal.total > 0 && !bal.isFullyConfirmed}
+              extra={nextStepExtra}
+            />
           )}
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             <span className="chip" style={{ background: st?.color, color: '#fff' }}>{st?.icon} {st?.label}</span>
@@ -563,5 +583,35 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
         )}
       </Modal>
     </>
+  )
+}
+
+// v13.80 — menu "Mais" do cabeçalho do pedido
+function MoreMenu({ items }) {
+  const list = (items || []).filter(Boolean)
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  if (list.length === 0) return null
+  return (
+    <div className="more-menu" ref={ref}>
+      <button type="button" className="btn btn-outline btn-sm" onClick={() => setOpen(v => !v)} aria-expanded={open} aria-haspopup="menu">
+        Mais ▾
+      </button>
+      {open && (
+        <div className="more-menu-list" role="menu">
+          {list.map(it => (
+            <button key={it.label} type="button" role="menuitem" title={it.title} onClick={() => { setOpen(false); it.onClick() }}>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

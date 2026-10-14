@@ -10,6 +10,8 @@ import { buildProductPriceHistory, computePriceStats, computePriceTrend } from '
 import { parseDateLocal } from './utils'
 
 const norm = (s) => (s || '').toString().trim().toLowerCase()
+// v13.80 — sugestão de quantidade sempre de 5 em 5 (ninguém pede 33 peças)
+const to5 = (n) => (n > 0 ? Math.max(5, Math.round(n / 5) * 5) : 0)
 
 // Pedidos que contam como "demanda histórica" (já foram de fato encomendados).
 // Rascunho não conta (ainda não é pedido); lixeira/purga também não.
@@ -45,7 +47,7 @@ export function suggestQuantity(productId, colorCode, orders = []) {
   }
   if (!qtys.length) return null
   return {
-    avg: Math.round(qtys.reduce((a, b) => a + b, 0) / qtys.length),
+    avg: to5(qtys.reduce((a, b) => a + b, 0) / qtys.length),
     last: lastQty,
     count: qtys.length,
   }
@@ -80,7 +82,7 @@ export function suggestColorsForModel(productId, orders = []) {
       code: x.code,
       count: x.count,
       totalQty: x.totalQty,
-      avgQty: Math.round(x.totalQty / x.count),
+      avgQty: to5(x.totalQty / x.count),
       lastOrderedAt: x.lastTime > -Infinity ? new Date(x.lastTime).toISOString() : null,
     }))
     .sort((a, b) => b.count - a.count || b.totalQty - a.totalQty)

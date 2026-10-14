@@ -115,3 +115,20 @@ describe('priceSignalForModel', () => {
     expect(priceSignalForModel('inexistente', orders)).toBeNull()
   })
 })
+
+describe('sugestão de quantidade de 5 em 5 (v13.80)', () => {
+  it('média quebrada vira múltiplo de 5', () => {
+    const orders = [
+      { id: 'a', status: 'completed', created_at: '2026-01-01', items: [{ product_id: 'p1', colors: [{ code: '6', qty: 15 }] }] },
+      { id: 'b', status: 'completed', created_at: '2026-02-01', items: [{ product_id: 'p1', colors: [{ code: '6', qty: 50 }] }] },
+      { id: 'c', status: 'completed', created_at: '2026-03-01', items: [{ product_id: 'p1', colors: [{ code: '6', qty: 35 }] }] },
+    ]
+    // média real 33,3 → 35
+    expect(suggestQuantity('p1', '6', orders).avg).toBe(35)
+    expect(suggestColorsForModel('p1', orders)[0].avgQty).toBe(35)
+  })
+  it('nunca sugere menos de 5', () => {
+    const orders = [{ id: 'a', status: 'completed', created_at: '2026-01-01', items: [{ product_id: 'p1', colors: [{ code: '6', qty: 2 }] }] }]
+    expect(suggestQuantity('p1', '6', orders).avg).toBe(5)
+  })
+})

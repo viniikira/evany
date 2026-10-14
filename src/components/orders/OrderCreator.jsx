@@ -205,13 +205,30 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
   }, [products, ideas, f.factory, modelSearch])
 
   // ── Itens (combinações) ──
+  // v13.80 — o modelo novo entra no fim da lista; a tela rola até ele
+  const [justAdded, setJustAdded] = useState(null)
+  useEffect(() => {
+    if (!justAdded) return
+    const t = setTimeout(() => {
+      document.getElementById(`model-${justAdded}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setJustAdded(null)
+    }, 60)
+    return () => clearTimeout(t)
+  }, [justAdded])
+
   const addModel = (source, isIdea = false) => {
     const already = (f.items || []).some(it => isIdea ? it.idea_id === source.id : it.product_id === source.id)
-    if (already) return
+    if (already) {
+      const existing = (f.items || []).find(it => isIdea ? it.idea_id === source.id : it.product_id === source.id)
+      if (existing) setJustAdded(existing.id)
+      return
+    }
+    const newId = 'tmp-' + uid()
+    setJustAdded(newId)
     setF(prev => ({
       ...prev,
       items: [...(prev.items || []), {
-        id: 'tmp-' + uid(),
+        id: newId,
         product_id: isIdea ? '' : source.id,
         idea_id: isIdea ? source.id : null,
         idea_name_snapshot: isIdea ? source.name : null,
@@ -613,7 +630,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                 return (
                   <button
                     key={fa.id}
-                    onClick={() => s('factory', fa.name)}
+                    onClick={() => { s('factory', fa.name); if (!isEdit) setStep(2) }}
                     style={{
                       padding: '16px 14px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
                       border: `2px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
@@ -884,7 +901,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                 }, 0)
 
                 return (
-                  <div key={it.id} style={{ border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)', marginBottom: 16, overflow: 'hidden' }}>
+                  <div key={it.id} id={`model-${it.id}`} style={{ border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)', marginBottom: 16, overflow: 'hidden', scrollMarginTop: 12 }}>
                     {/* Cabeçalho do modelo */}
                     <div style={{ display: 'flex', gap: 12, padding: 12, alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ width: 56, height: 74, borderRadius: 8, overflow: 'hidden', background: 'var(--bg)', flexShrink: 0 }}>
@@ -956,7 +973,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                                   }}
                                   title={`Última FOB registrada: $${intel.price.lastPrice.toFixed(2)} · ${intel.price.count} pedido(s) no histórico${canApply ? ' — clique pra usar' : ''}`}
                                 >
-                                  {intel.price.trend === 'up' ? '📈' : intel.price.trend === 'down' ? '📉' : '💲'} última FOB ${intel.price.lastPrice.toFixed(2)}
+                                  {intel.price.trend === 'up' ? '📈' : intel.price.trend === 'down' ? '📉' : '💲'} última FOB US$ {formatFixedBR(intel.price.lastPrice)}
                                   {intel.price.hasIncreaseAlert && intel.price.lastIncreasePct != null ? ` · subiu ${Math.round(intel.price.lastIncreasePct)}%` : ''}
                                   {canApply ? ' · usar' : ''}
                                 </Tag>
@@ -1032,6 +1049,16 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                         return (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10, alignItems: 'center' }}>
                             <span className="text-muted" style={{ fontSize: 11 }}>↻ Costuma pedir:</span>
+                            {sugg.length > 1 && (
+                              <button
+                                onClick={() => sugg.slice(0, 6).forEach(sc => toggleColor(it.id, sc.code, registered.has((sc.code || '').toLowerCase())))}
+                                className="chip"
+                                style={{ cursor: 'pointer', fontSize: 11, background: 'var(--primary)', border: '1px solid var(--primary)', color: '#fff', fontWeight: 600 }}
+                                title="Adiciona de uma vez as cores que você costuma pedir deste modelo, já com a quantidade de sempre"
+                              >
+                                + todas ({Math.min(6, sugg.length)})
+                              </button>
+                            )}
                             {sugg.slice(0, 6).map(sc => (
                               <button
                                 key={sc.code}

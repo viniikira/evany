@@ -48,9 +48,9 @@ export function ReviewPriceTable({
     <div className="orv">
       {items.map(it => {
         const info = modelInfo(it)
-        const rows = (it.colors || [])
-          .map((c, idx) => ({ c, idx }))
-          .filter(({ c }) => Number(c.qty || 0) > 0)
+        // v13.80 — todas as cores do modelo (a linha não some se ela apagar a
+        // quantidade pra digitar outra); quem fica com 0 não vai pro pedido
+        const rows = (it.colors || []).map((c, idx) => ({ c, idx }))
         if (rows.length === 0) return null
 
         const baseFob = num(it.price_usd)
@@ -75,7 +75,7 @@ export function ReviewPriceTable({
               <div className="orv-model-name">
                 <strong>{UC(info.name)}</strong>
                 {info.code && <span>{info.code}</span>}
-                <em>{pcs.toLocaleString('pt-BR')} peças · {rows.length} cor{rows.length !== 1 ? 'es' : ''}</em>
+                <em>{pcs.toLocaleString('pt-BR')} peças · {rows.filter(r => Number(r.c.qty) > 0).length} cor{rows.filter(r => Number(r.c.qty) > 0).length !== 1 ? 'es' : ''}</em>
               </div>
               {showPrices && (
                 <div className="orv-bases">
@@ -106,7 +106,19 @@ export function ReviewPriceTable({
                     <ColorSwatch code={l.c.code} colors={colors} size="xs" />
                     {l.c.code}
                   </span>
-                  <span className="num strong">{l.qty.toLocaleString('pt-BR')}</span>
+                  <span className="num">
+                    <input
+                      className={`orv-qty${l.qty > 0 ? '' : ' zero'}`}
+                      type="text" inputMode="numeric"
+                      value={l.c.qty === '' || l.c.qty == null ? '' : String(l.c.qty)}
+                      onChange={e => {
+                        const d = e.target.value.replace(/\D/g, '').slice(0, 6)
+                        onColorField(it.id, l.idx, 'qty', d === '' ? '' : Number(d))
+                      }}
+                      aria-label={`Quantidade da cor ${l.c.code}`}
+                      title={l.qty > 0 ? undefined : 'Com 0 peças esta cor não vai pro pedido'}
+                    />
+                  </span>
                   {showPrices && (
                     <span>
                       <MoneyInput

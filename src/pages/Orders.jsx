@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Modal, useConfirm, useToast, SkeletonList } from '../components/ui'
 import { LeadTimePromptModal } from '../components/orders/LeadTimePromptModal'
+import { ArrivalPromptModal } from '../components/orders/ArrivalPromptModal'
 import { CompletionSummaryModal } from '../components/orders/CompletionSummaryModal'
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
@@ -54,15 +55,23 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   useEffect(() => {
     if (!openAfterSave || orders.length === 0) return
     const target = orders.find(o => o.id === openAfterSave)
-    if (target) setDetail(target)
+    // v13.80 — pedido recém-criado ainda não está na lista: espera o load trazer
+    // (antes desistia na hora e o pedido salvo nunca abria)
+    if (!target) return
+    setDetail(target)
     setOpenAfterSave(null)
   }, [openAfterSave, orders])
+  // Sempre a versão mais nova da lista (callbacks que rodam depois de um load)
+  const ordersRef = useRef(orders)
+  ordersRef.current = orders
   const [detail, setDetail] = useState(null)
   // #B Modal pós-conclusão: aparece quando pedido vira "Concluído"
   // mostrando resumo do que o sistema fez automaticamente
   const [completionSummary, setCompletionSummary] = useState(null)
   // #3 Modal pra perguntar prazo prometido ao mudar pra "Em Fabricação"
   const [leadTimePrompt, setLeadTimePrompt] = useState(null)
+  // v13.80 — ao ir pra "Em trânsito" sem previsão, pergunta quando chega
+  const [arrivalPrompt, setArrivalPrompt] = useState(null)
   const confirm = useConfirm()
   const toast = useToast()
 
@@ -591,6 +600,10 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
       setLeadTimePrompt({ order: o, newStatus })
       return  // Para aqui — o fluxo continua quando user submete o modal
     }
+    if (newStatus === 'in_transit' && oldStatus !== 'in_transit' && !o.expected_arrival && !extraData._arrivalShown) {
+      setArrivalPrompt({ order: o, newStatus })
+      return
+    }
     
     const labelNovo = ORDER_ST.find(s => s.id === newStatus)?.label
     const orderName = o.order_name || o.factory
@@ -669,6 +682,7 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
       // #3 Quando vai pra "Em Fabricação", grava prazo prometido + data de início.
       // Esses dados ficam fixos no pedido e são usados pra calcular "atrasado".
       const updateExtras = {}
+      if (extraData.expected_arrival) updateExtras.expected_arrival = extraData.expected_arrival
       if (newStatus === 'manufacturing' && extraData.promised_lead_days) {
         updateExtras.promised_lead_days = parseInt(extraData.promised_lead_days, 10) || null
         updateExtras.manufacturing_started_at = new Date().toISOString()
@@ -945,7 +959,13 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         onClose={() => {
           const editing = creator?.order
           setCreator(null)
-          if (editing?.id) setDetail(orders.find(x => x.id === editing.id) || editing)
+          // v13.80 — volta pro pedido com a versão MAIS NOVA (depois de salvar, o
+          // load já trouxe os valores novos; não sobrescrever com a cópia antiga)
+          if (editing?.id) {
+            setDetail(prev => (prev && prev.id === editing.id)
+              ? prev
+              : (ordersRef.current.find(x => x.id === editing.id) || editing))
+          }
         }}
       />
     )}
@@ -976,6 +996,25 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
           const ord = orders.find(o => o.id === completionSummary.orderId)
           if (ord) setDetail(ord)
           setCompletionSummary(null)
+        }}
+      />
+    )}
+    {arrivalPrompt && (
+      <ArrivalPromptModal
+        order={arrivalPrompt.order}
+        onClose={() => {
+          setArrivalPrompt(null)
+          toast.push('Mudança de status cancelada — pedido continua em ' + (ORDER_ST.find(s => s.id === arrivalPrompt.order.status)?.label || arrivalPrompt.order.status), { kind: 'info', duration: 4000 })
+        }}
+        onConfirm={async (date) => {
+          const { order, newStatus } = arrivalPrompt
+          setArrivalPrompt(null)
+          await changeStatus(order, newStatus, { expected_arrival: date, _arrivalShown: true })
+        }}
+        onSkip={async () => {
+          const { order, newStatus } = arrivalPrompt
+          setArrivalPrompt(null)
+          await changeStatus(order, newStatus, { _arrivalShown: true })
         }}
       />
     )}
