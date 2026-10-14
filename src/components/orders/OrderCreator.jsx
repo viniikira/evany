@@ -452,15 +452,35 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
     }
   }
 
+  // v13.79 — "às vezes você clica só pra olhar o pedido": sem mudança nenhuma,
+  // Cancelar/✕/Esc fecham na hora; só pergunta se tiver algo pra perder.
+  // O retrato inicial é tirado depois do 1º ciclo (o nome sugerido automático
+  // não conta como alteração dela).
+  const latestRef = useRef(f)
+  latestRef.current = f
+  const initialRef = useRef(null)
+  useEffect(() => {
+    const t = setTimeout(() => { initialRef.current = JSON.stringify(latestRef.current) }, 0)
+    return () => clearTimeout(t)
+  }, [])
+  const isDirty = initialRef.current != null
+    ? JSON.stringify(f) !== initialRef.current
+    : false
+
   const handleClose = async () => {
-    if ((f.items || []).length > 0) {
+    // Novo pedido: só pergunta se já tem modelo montado. Edição: se mudou algo.
+    const changed = !isEdit
+      ? (latestRef.current.items || []).length > 0
+      : (initialRef.current != null && JSON.stringify(latestRef.current) !== initialRef.current)
+    if (changed) {
       const ok = await confirm({
-        title: isEdit ? 'Sair sem salvar?' : 'Descartar pedido?',
+        title: isEdit ? 'Descartar as alterações?' : 'Descartar este pedido?',
         message: isEdit
-          ? 'Alterações não salvas serão perdidas. O pedido continua como estava.'
+          ? 'O que você mudou agora não será salvo. O pedido continua como estava.'
           : 'As combinações montadas serão perdidas.',
         danger: true,
-        confirmLabel: isEdit ? 'Sair sem salvar' : 'Descartar',
+        confirmLabel: 'Descartar',
+        cancelLabel: 'Continuar editando',
       })
       if (!ok) return
     }
@@ -507,14 +527,18 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
           })()}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-          {[
-            { n: 1, label: 'Fábrica' },
-            { n: 2, label: 'Modelos e cores' },
-            { n: 3, label: 'Revisão' },
-          ].map(x => (
+          {(isEdit
+            ? [{ n: 2, label: 'Modelos e cores' }, { n: 3, label: 'Revisão e preços' }]
+            : [{ n: 1, label: 'Fábrica' }, { n: 2, label: 'Modelos e cores' }, { n: 3, label: 'Revisão e preços' }]
+          ).map((x, i) => (
             <button
               key={x.n}
-              onClick={() => { if (x.n < step || (x.n === 2 && f.factory)) setStep(x.n) }}
+              title={x.n === step ? undefined : `Ir para ${x.label.toLowerCase()}`}
+              onClick={() => {
+                if (x.n < step) return setStep(x.n)
+                if (x.n === 2 && f.factory) return setStep(2)
+                if (x.n === 3 && f.factory && (f.items || []).some(it => (it.colors || []).some(c => Number(c.qty || 0) > 0))) setStep(3)
+              }}
               style={{
                 padding: '4px 12px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
                 border: '1px solid ' + (step === x.n ? 'var(--primary)' : 'var(--border)'),
@@ -522,7 +546,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                 color: step === x.n ? '#fff' : 'var(--text-muted, #6b7280)',
                 fontWeight: step === x.n ? 600 : 400,
               }}
-            >{x.n}. {x.label}</button>
+            >{i + 1}. {x.label}</button>
           ))}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1084,7 +1108,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                         <div style={{ flex: 1 }}>Combinação</div>
                         {showPrices && <div style={{ width: 108, textAlign: 'center' }}>preço/un</div>}
                         <div style={{ width: 118, textAlign: 'center' }}>quantidade</div>
-                        {showPrices && <div style={{ width: 82, textAlign: 'right' }}>total</div>}
+                        {showPrices && <div style={{ minWidth: 104, textAlign: 'right' }}>total</div>}
                         <div style={{ width: 26 }} />
                       </div>
                     )}
@@ -1207,7 +1231,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                           </div>
                           {/* Total só quando existe (nada de "—" solto parecendo sinal de menos) */}
                           {showPrices && (
-                            <div style={{ width: 82, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#F59E0B', flexShrink: 0 }}>
+                            <div style={{ minWidth: 104, textAlign: 'right', fontSize: 13, fontWeight: 700, color: 'var(--text)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                               {lineTotal > 0 ? '= ' + fmt$(lineTotal) : ''}
                             </div>
                           )}
@@ -1340,11 +1364,20 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
             >compra <strong style={{ color: 'var(--text)' }}>{fmt$(totals.total)}</strong>{!totals.confirmedAll && ' (estimada)'} ≈ <strong style={{ color: 'var(--text)' }}>{fmtR$(totals.landed)}</strong></span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {step > 1 && <button className="btn btn-outline" onClick={() => setStep(step - 1)}>← Voltar</button>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            className="btn btn-outline"
+            onClick={handleClose}
+            title={isDirty ? 'Sair sem salvar o que você mudou' : 'Fechar (nada foi alterado)'}
+          >Cancelar</button>
+          {step > (isEdit ? 2 : 1) && (
+            <button className="btn btn-outline" onClick={() => setStep(step - 1)}>
+              ← {step === 3 ? 'Modelos e cores' : 'Fábrica e nome'}
+            </button>
+          )}
           {step < 3 && (
             <button className="btn btn-primary" disabled={!canAdvance} onClick={() => setStep(step + 1)}>
-              {step === 1 ? 'Escolher modelos →' : 'Revisar pedido →'}
+              {step === 1 ? 'Escolher modelos →' : 'Revisão e preços →'}
             </button>
           )}
           {/* Planilha da fábrica não tem preços (v13.58) — disponível mesmo no hide mode */}

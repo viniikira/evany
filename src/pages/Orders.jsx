@@ -941,7 +941,12 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         leadTimeByFactory={leadTimeByFactory}
         shopifyCache={shopifyCache}
         onSave={save}
-        onClose={() => setCreator(null)}
+        // v13.79 — cancelar uma edição volta pro pedido que ela estava olhando
+        onClose={() => {
+          const editing = creator?.order
+          setCreator(null)
+          if (editing?.id) setDetail(orders.find(x => x.id === editing.id) || editing)
+        }}
       />
     )}
     {detail && (
