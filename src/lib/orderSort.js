@@ -18,10 +18,10 @@ import { computeOrderBalance } from './financial'
 import { parseDateLocal } from './utils'
 
 export const SORT_MODES = [
-  { id: 'smart', label: '📋 Por etapa' },
-  { id: 'date', label: '📅 Data do pedido' },
-  { id: 'debt', label: '💸 Falta pagar' },
-  { id: 'value', label: '💵 Valor do pedido' },
+  { id: 'smart', label: 'Ordenar: por etapa' },
+  { id: 'date', label: 'Ordenar: data do pedido' },
+  { id: 'debt', label: 'Ordenar: falta pagar' },
+  { id: 'value', label: 'Ordenar: valor do pedido' },
 ]
 
 // (ORDER_GROUPS da v13.72 removido na v13.76: a lista agora é por etapa)

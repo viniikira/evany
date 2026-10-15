@@ -1,22 +1,21 @@
 // src/components/orders/OrdersBoard.jsx
-// v13.76 — Lista de pedidos redesenhada do zero.
+// v13.81 — Lista de pedidos, visual refeito com referência em painéis
+// profissionais de pedidos:
+//   • Shopify (lista de pedidos): ABAS com contagem + BUSCA no topo + tabela
+//     compacta com etiqueta de situação.
+//   • Linear: UMA lista só, com cabeçalhos de grupo finos (não uma tabela
+//     separada por etapa, cada uma repetindo o cabeçalho).
+//   • Stripe: números alinhados, cor só onde significa algo.
 //
-// O que ela pediu: "o que está em revisão está junto do trânsito, da
-// fabricação… fontes feias, cores feias, não está inteligente".
+// Ela disse: "ainda tá feio, ruim de ver, confuso — e a forma de encontrar".
+// Então: os 5 cartões grandes viraram abas; entrou busca por pedido, fábrica,
+// modelo ou cor; "Precisa de você" ficou compacto (3 itens + ver todos);
+// pagamento sem barra cinza vazia; concluídos ficam numa aba própria.
 //
-// Estrutura (de cima pra baixo):
-//   1. ETAPAS — uma faixa com o ciclo do pedido. Cada etapa mostra quantos
-//      pedidos, quantas peças e quanto falta pagar. Clicar filtra.
-//   2. PRECISA DE VOCÊ — os problemas escritos em português, com o botão que
-//      resolve ali mesmo (mudar previsão, marcar que chegou, abrir).
-//   3. UMA TABELA POR ETAPA — linhas alinhadas, então dá pra comparar prazo e
-//      pagamento entre pedidos de relance. Concluídos ficam recolhidos.
-//
-// Visual: Inter, fundo neutro, uma cor discreta por etapa (o ponto), vermelho
-// só pra problema real. Estilos em main.css com prefixo ob-.
+// Estilos em styles/orders-board.css (prefixo ob-).
 
-import { useMemo, useState } from 'react'
-import { groupOrdersByStage, buildAttention, ORDER_STAGES } from '../../lib/orderSort'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { groupOrdersByStage, buildAttention, sortOrders, ORDER_STAGES } from '../../lib/orderSort'
 import { computeOrderBalance } from '../../lib/financial'
 import { computeOrderDelay } from '../../lib/pendencias'
 import { formatDate, parseDateLocal } from '../../lib/utils'
@@ -25,93 +24,182 @@ import '../../styles/orders-board.css'
 
 const STAGE_VAR = {
   draft: 'var(--st-draft)', sent: 'var(--st-sent)', manufacturing: 'var(--st-mfg)',
-  in_transit: 'var(--st-transit)', completed: 'var(--st-done)',
+  in_transit: 'var(--st-transit)', completed: 'var(--st-done)', cancelled: 'var(--st-draft)',
 }
+// Abas: "Em andamento" (padrão) junta tudo que ainda não chegou
+export const ORDER_TABS = [
+  { id: 'active', label: 'Em andamento', match: (o) => o.status !== 'completed' && o.status !== 'cancelled' },
+  ...ORDER_STAGES.map(s => ({ id: s.id, label: s.label, match: (o) => (o.status === 'cancelled' ? 'completed' : o.status) === s.id })),
+  { id: 'all', label: 'Todos', match: () => true },
+]
 const DAY = 86400000
 const usd = (n) => 'US$ ' + Math.round(n || 0).toLocaleString('pt-BR')
 const brl = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR')
 const today = () => new Date(new Date().toDateString()).getTime()
+const plural = (n, s, p) => `${n.toLocaleString('pt-BR')} ${n === 1 ? s : p}`
 
 const piecesOf = (o) => (o.items || []).reduce((a, it) => a + (it.colors || []).reduce((b, c) => b + (Number(c.qty) || 0), 0), 0)
 const colorsOf = (o) => (o.items || []).reduce((a, it) => a + (it.colors || []).filter(c => Number(c.qty) > 0).length, 0)
 
+// Busca sem acento e sem diferença de maiúscula; todas as palavras precisam bater
+const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+function searchText(o, productsById, colorName) {
+  const parts = [o.order_name, o.factory, o.notes]
+  for (const it of (o.items || [])) {
+    const p = productsById.get(it.product_id)
+    parts.push(it.name_manual, p?.name, p?.sku, it.product_name_snapshot)
+    for (const c of (it.colors || [])) {
+      if (!(Number(c.qty) > 0)) continue
+      parts.push(c.code, colorName.get(c.code))
+    }
+  }
+  return norm(parts.filter(Boolean).join(' '))
+}
+
 export function OrdersBoard({
-  orders = [], products = [], perm = {}, rate, leadTimeByFactory = new Map(),
-  mode = 'stage', flatOrders = null, stageFilter = 'all', onStageFilter,
+  orders = [], products = [], colors = [], perm = {}, rate, leadTimeByFactory = new Map(),
+  sortMode = 'smart', tab = 'active', onTab, actions = null,
   onOpen, onArrivalSave, onMarkArrived,
 }) {
   const ctx = { rate, leadTimeByFactory }
-  const grouped = useMemo(() => groupOrdersByStage(orders, ctx), [orders, rate, leadTimeByFactory])
-  const attention = useMemo(() => buildAttention(orders, ctx), [orders, rate, leadTimeByFactory])
-  const [showDone, setShowDone] = useState(false)
+  const showPrices = !!perm.prices
   const productsById = useMemo(() => new Map(products.map(p => [p.id, p])), [products])
-  // Nível de alerta por pedido (o mais grave dele): alto = vermelho, médio = âmbar
+  const colorName = useMemo(() => new Map(colors.map(c => [c.code, c.name_pt || c.name])), [colors])
+
+  // ── Busca ("/" foca a busca, Esc limpa)
+  const [query, setQuery] = useState('')
+  const searchRef = useRef(null)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey) return
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      e.preventDefault()
+      searchRef.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+  const haystack = useMemo(() => new Map(orders.map(o => [o.id, searchText(o, productsById, colorName)])), [orders, productsById, colorName])
+  const terms = norm(query).split(/\s+/).filter(Boolean)
+  const searched = terms.length === 0 ? orders : orders.filter(o => terms.every(t => haystack.get(o.id)?.includes(t)))
+
+  // ── Abas
+  const activeTab = ORDER_TABS.find(t => t.id === tab) || ORDER_TABS[0]
+  const tabOrders = searched.filter(activeTab.match)
+
+  // ── Precisa de você (o que tem problema, só da aba atual)
+  const attentionAll = useMemo(() => buildAttention(orders, ctx), [orders, rate, leadTimeByFactory])
   const flagged = useMemo(() => {
     const m = new Map()
-    for (const a of attention) {
+    for (const a of attentionAll) {
       if (a.severity === 'low') continue
       if (m.get(a.order.id) !== 'high') m.set(a.order.id, a.severity)
     }
     return m
-  }, [attention])
-  // Contagem por etapa a partir do MESMO painel de atenção (antes vinha de outra regra)
-  const flagsByStage = useMemo(() => {
-    const m = new Map()
-    for (const [id] of flagged) {
-      const o = orders.find(x => x.id === id)
-      const st = o?.status === 'cancelled' ? 'completed' : o?.status
-      if (st) m.set(st, (m.get(st) || 0) + 1)
+  }, [attentionAll])
+  const tabIds = new Set(tabOrders.map(o => o.id))
+  const attention = attentionAll.filter(a => tabIds.has(a.order.id))
+  const [showAllAttn, setShowAllAttn] = useState(false)
+
+  // ── Lista
+  const grouped = groupOrdersByStage(tabOrders, ctx)
+  const flat = sortMode === 'smart' ? null : sortOrders(tabOrders, sortMode, ctx)
+  const [doneOpen, setDoneOpen] = useState(false)
+
+  // ── Resumo da aba
+  const summary = (() => {
+    let pieces = 0, remUsd = 0, remBrl = 0, nextArrival = null
+    for (const o of tabOrders) {
+      pieces += piecesOf(o)
+      if (o.status !== 'draft') {
+        const b = computeOrderBalance(o, rate)
+        if (!b.isSettled && b.remainingUsd > 0) { remUsd += b.remainingUsd; remBrl += b.remainingBrl || 0 }
+      }
+      if (o.status === 'in_transit') {
+        const t = parseDateLocal(o.expected_arrival)?.getTime()
+        if (t != null && (!nextArrival || t < nextArrival.t)) nextArrival = { t, o }
+      }
     }
-    return m
-  }, [flagged, orders])
+    return { pieces, remUsd, remBrl, nextArrival }
+  })()
 
-  const showPrices = !!perm.prices
-  const rowProps = { productsById, showPrices, rate, leadTimeByFactory, flagged, onOpen, onArrivalSave, onMarkArrived }
-
-  const visibleStages = grouped.stages.filter(st =>
-    st.orders.length > 0 && (stageFilter === 'all' || stageFilter === st.id))
+  const rowProps = { productsById, showPrices, leadTimeByFactory, flagged, rate, onOpen, onArrivalSave, onMarkArrived }
+  const attnVisible = showAllAttn ? attention : attention.slice(0, 3)
 
   return (
     <div className="ob">
-      {/* 1. Etapas */}
-      <div className="ob-pipe" role="tablist" aria-label="Etapas do pedido">
-        {grouped.stages.map(st => {
-          const active = stageFilter === st.id
+      {/* Abas */}
+      <nav className="ob-tabs" role="tablist" aria-label="Etapas do pedido">
+        {ORDER_TABS.map(t => {
+          const n = searched.filter(t.match).length
+          const hasFlag = t.id !== 'all' && t.id !== 'active' && searched.some(o => t.match(o) && flagged.has(o.id))
+          const on = t.id === activeTab.id
           return (
             <button
-              key={st.id}
+              key={t.id}
               type="button"
               role="tab"
-              aria-selected={active}
-              className={`ob-stage${active ? ' active' : ''}${st.orders.length === 0 ? ' empty' : ''}`}
-              style={{ '--stage': STAGE_VAR[st.id] }}
-              onClick={() => onStageFilter && onStageFilter(active ? 'all' : st.id)}
-              title={active ? 'Mostrar todas as etapas' : `Ver só ${st.label.toLowerCase()}`}
+              aria-selected={on}
+              className={`ob-tab${on ? ' on' : ''}${n === 0 ? ' zero' : ''}`}
+              onClick={() => onTab && onTab(t.id)}
             >
-              <span className="ob-stage-label"><i className="ob-dot" />{st.label}</span>
-              <span className="ob-stage-count">{st.orders.length}</span>
-              <span className="ob-stage-meta">
-                {st.orders.length === 0 ? 'nenhum pedido' : `${st.pieces.toLocaleString('pt-BR')} peças`}
-              </span>
-              {showPrices && st.id !== 'draft' && st.remainingUsd > 0.5 && (
-                <span className="ob-stage-meta">falta {usd(st.remainingUsd)}</span>
-              )}
-              {flagsByStage.get(st.id) > 0 && <span className="ob-stage-flag" title="Pedidos desta etapa que precisam de você">{flagsByStage.get(st.id)}</span>}
+              {STAGE_VAR[t.id] && <i className="ob-dot" style={{ '--stage': STAGE_VAR[t.id] }} />}
+              {t.label}
+              <span className="ob-tab-n">{n}</span>
+              {hasFlag && <span className="ob-tab-flag" title="Tem pedido aqui que precisa de você" />}
             </button>
           )
         })}
+      </nav>
+
+      {/* Busca + ações */}
+      <div className="ob-bar">
+        <label className="ob-search">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden><path fill="currentColor" d="M8.5 3a5.5 5.5 0 0 1 4.38 8.82l3.65 3.65a.75.75 0 1 1-1.06 1.06l-3.65-3.65A5.5 5.5 0 1 1 8.5 3Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" /></svg>
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Escape') { setQuery(''); e.currentTarget.blur() } }}
+            placeholder="Buscar pedido, fábrica, modelo ou cor"
+            aria-label="Buscar pedidos"
+          />
+          {query ? <button type="button" className="ob-search-x" onClick={() => setQuery('')} aria-label="Limpar busca">×</button> : <kbd>/</kbd>}
+        </label>
+        <div className="ob-bar-actions">{actions}</div>
       </div>
 
-      {/* 2. Precisa de você */}
-      {attention.length > 0 && stageFilter === 'all' && mode === 'stage' && (
-        <section className="ob-panel" aria-label="Precisa de você">
-          <header className="ob-panel-head">
+      {/* Resumo da aba numa linha */}
+      {tabOrders.length > 0 && (
+        <div className="ob-summary">
+          <span><strong>{plural(tabOrders.length, 'pedido', 'pedidos')}</strong> · {plural(summary.pieces, 'peça', 'peças')}</span>
+          {showPrices && summary.remUsd > 0.5 && (
+            <span>Falta pagar <strong>{usd(summary.remUsd)}</strong>{summary.remBrl > 0 && <em> ≈ {brl(summary.remBrl)}</em>}</span>
+          )}
+          {summary.nextArrival && (() => {
+            const d = Math.round((summary.nextArrival.t - today()) / DAY)
+            const name = summary.nextArrival.o.order_name || summary.nextArrival.o.factory
+            return (
+              <span>Próxima chegada <strong>{name}</strong>{' '}
+                <em className={d < 0 ? 'bad' : ''}>{d < 0 ? `venceu há ${d * -1} dias` : d === 0 ? 'hoje' : `em ${d} dias`}</em>
+              </span>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* Precisa de você */}
+      {terms.length === 0 && attention.length > 0 && (
+        <section className="ob-attn" aria-label="Precisa de você">
+          <header>
             <h3>Precisa de você</h3>
-            <span className="ob-count-bad">{attention.length}</span>
+            <span className="ob-pill bad">{attention.length}</span>
           </header>
-          <ul className="ob-attn">
-            {attention.map(a => (
-              <li key={a.id} className={`ob-attn-row sev-${a.severity}`}>
+          <ul>
+            {attnVisible.map(a => (
+              <li key={a.id} className={`sev-${a.severity}`}>
                 <i className="ob-sev" aria-hidden />
                 <button type="button" className="ob-attn-text" onClick={() => onOpen && onOpen(a.order)}>
                   <strong>{a.name}</strong>
@@ -119,78 +207,93 @@ export function OrdersBoard({
                 </button>
                 <div className="ob-attn-actions">
                   {a.actions.includes('arrived') && onMarkArrived && (
-                    <button type="button" className="ob-btn ob-btn-good" onClick={() => onMarkArrived(a.order)}>Chegou</button>
+                    <button type="button" className="ob-btn good" onClick={() => onMarkArrived(a.order)}>Chegou</button>
                   )}
                   {a.actions.includes('arrival') && onArrivalSave && (
                     <ArrivalEditor
                       value={a.order.expected_arrival || ''}
                       overdue={a.kind === 'arrival_overdue'}
-                      compact
                       label={a.order.expected_arrival ? 'Mudar previsão' : 'Definir previsão'}
                       onSave={(d) => onArrivalSave(a.order, d)}
                     />
                   )}
                   {a.actions.includes('open') && (
-                    <button type="button" className="ob-btn" onClick={() => onOpen && onOpen(a.order)}>Abrir</button>
+                    <button type="button" className="ob-link" onClick={() => onOpen && onOpen(a.order)}>Abrir →</button>
                   )}
                 </div>
               </li>
             ))}
           </ul>
+          {attention.length > 3 && (
+            <button type="button" className="ob-attn-more" onClick={() => setShowAllAttn(v => !v)}>
+              {showAllAttn ? 'Mostrar menos' : `Ver todos (${attention.length})`}
+            </button>
+          )}
         </section>
       )}
 
-      {/* 3. Tabelas */}
-      {mode === 'stage' ? (
-        visibleStages.length === 0 ? (
-          <div className="ob-empty">Nenhum pedido nesta etapa.</div>
-        ) : visibleStages.map(st => {
-          const collapsed = st.collapsedByDefault && !showDone && stageFilter !== st.id
-          return (
-            <section key={st.id} className="ob-section" style={{ '--stage': STAGE_VAR[st.id] }}>
-              <header className="ob-section-head">
-                <i className="ob-dot" />
-                <h3>{st.label}</h3>
-                <span className="ob-section-count">{st.orders.length}</span>
-                <span className="ob-section-hint">{st.hint}</span>
-                <span className="ob-section-meta">
-                  {st.pieces.toLocaleString('pt-BR')} peças
-                  {showPrices && st.id !== 'draft' && st.remainingUsd > 0.5 && <> · falta {usd(st.remainingUsd)}</>}
-                </span>
-                {st.collapsedByDefault && stageFilter !== st.id && (
-                  <button type="button" className="ob-btn" onClick={() => setShowDone(v => !v)}>
-                    {collapsed ? `Mostrar ${st.orders.length}` : 'Recolher'}
-                  </button>
-                )}
-              </header>
-              {!collapsed && <OrdersTable orders={st.orders} {...rowProps} />}
-            </section>
-          )
-        })
+      {/* Lista */}
+      {tabOrders.length === 0 ? (
+        <div className="ob-empty">
+          {terms.length > 0 ? (
+            <>
+              Nenhum pedido {activeTab.id === 'all' ? '' : `em “${activeTab.label}” `}com “{query}”.
+              {searched.length > 0 && activeTab.id !== 'all' && (
+                <> <button type="button" className="ob-link" onClick={() => onTab && onTab('all')}>Procurar em todos</button></>
+              )}
+              {' '}<button type="button" className="ob-link" onClick={() => setQuery('')}>Limpar busca</button>
+            </>
+          ) : `Nenhum pedido em “${activeTab.label}”.`}
+        </div>
       ) : (
-        <OrdersTable orders={flatOrders || orders} showStage {...rowProps} />
+        <div className={`ob-table${showPrices ? '' : ' no-pay'}`} role="table">
+          <div className="ob-row ob-head" role="row">
+            <span role="columnheader">Pedido</span>
+            <span role="columnheader" className="num">Peças</span>
+            <span role="columnheader">Andamento</span>
+            {showPrices && <span role="columnheader">Pagamento</span>}
+            <span />
+          </div>
+          {flat ? (
+            flat.map(o => <OrderRow key={o.id} order={o} showStage {...rowProps} />)
+          ) : (
+            grouped.stages.filter(st => st.orders.length > 0).map(st => {
+              const single = activeTab.id === st.id
+              const collapsible = st.collapsedByDefault && !single && terms.length === 0
+              const open = !collapsible || doneOpen
+              return (
+                <div key={st.id} role="rowgroup">
+                  {!single && (
+                    <div
+                      className={`ob-group${collapsible ? ' toggle' : ''}`}
+                      style={{ '--stage': STAGE_VAR[st.id] }}
+                      onClick={collapsible ? () => setDoneOpen(v => !v) : undefined}
+                      role={collapsible ? 'button' : undefined}
+                      aria-expanded={collapsible ? open : undefined}
+                    >
+                      <i className="ob-dot" />
+                      <strong>{st.label}</strong>
+                      <span className="ob-group-n">{st.orders.length}</span>
+                      <span className="ob-group-hint">{st.hint}</span>
+                      <span className="ob-group-meta">
+                        {plural(st.pieces, 'peça', 'peças')}
+                        {showPrices && st.id !== 'draft' && st.remainingUsd > 0.5 && <> · falta {usd(st.remainingUsd)}</>}
+                        {collapsible && <span className="ob-group-toggle">{open ? 'Recolher' : 'Mostrar'}</span>}
+                      </span>
+                    </div>
+                  )}
+                  {open && st.orders.map(o => <OrderRow key={o.id} order={o} {...rowProps} />)}
+                </div>
+              )
+            })
+          )}
+        </div>
       )}
     </div>
   )
 }
 
-function OrdersTable({ orders, showStage = false, ...rowProps }) {
-  return (
-    <div className={`ob-table${rowProps.showPrices ? '' : ' no-pay'}`}>
-      <div className="ob-row ob-row-head" aria-hidden>
-        <span />
-        <span>Pedido</span>
-        <span className="num">Peças</span>
-        <span>Prazo e chegada</span>
-        {rowProps.showPrices && <span>Pagamento</span>}
-        <span />
-      </div>
-      {orders.map(o => <OrderRow key={o.id} order={o} showStage={showStage} {...rowProps} />)}
-    </div>
-  )
-}
-
-function OrderRow({ order: o, productsById, showPrices, rate, leadTimeByFactory, flagged, showStage, onOpen, onArrivalSave, onMarkArrived }) {
+function OrderRow({ order: o, productsById, showPrices, rate, leadTimeByFactory, flagged, showStage = false, onOpen, onArrivalSave, onMarkArrived }) {
   const thumbs = []
   for (const it of (o.items || [])) {
     const p = productsById.get(it.product_id)
@@ -200,66 +303,69 @@ function OrderRow({ order: o, productsById, showPrices, rate, leadTimeByFactory,
   const nModels = (o.items || []).length
   const pieces = piecesOf(o)
   const nColors = colorsOf(o)
-  const stage = ORDER_STAGES.find(s => s.id === o.status)
+  const stageId = o.status === 'cancelled' ? 'completed' : o.status
+  const stage = ORDER_STAGES.find(s => s.id === stageId)
+  const flag = flagged.get(o.id)
+  const date = o.order_date || o.created_at
 
   return (
     <div
-      className={`ob-row${flagged.get(o.id) ? ` flagged-${flagged.get(o.id)}` : ''}`}
-      role="button"
+      className={`ob-row${flag ? ` flag-${flag}` : ''}`}
+      role="row"
       tabIndex={0}
       onClick={() => onOpen && onOpen(o)}
       onKeyDown={(e) => { if (e.key === 'Enter' && onOpen) onOpen(o) }}
     >
-      <div className="ob-thumbs" aria-hidden>
-        {thumbs.slice(0, 3).map((u, i) => <img key={i} src={u} alt="" loading="lazy" />)}
-        {thumbs.length === 0 && <span className="ob-thumb-empty" />}
-        {nModels > 3 && <span className="ob-thumb-more">+{nModels - 3}</span>}
+      <div className="ob-order" role="cell">
+        <div className="ob-thumbs" aria-hidden>
+          {thumbs.slice(0, 3).map((u, i) => <img key={i} src={u} alt="" loading="lazy" />)}
+          {thumbs.length === 0 && <span className="ob-thumb-empty" />}
+        </div>
+        <div className="ob-name">
+          <strong>{o.order_name || <>{o.factory} <em>· sem nome</em></>}</strong>
+          <span>
+            {showStage && stage && <span className="ob-stage-tag" style={{ '--stage': STAGE_VAR[stageId] }}>{stage.label}</span>}
+            {o.factory}
+            {date && <> · {formatDate(date, 'full')}</>}
+            {' · '}{plural(nModels, 'modelo', 'modelos')}
+          </span>
+        </div>
       </div>
 
-      <div className="ob-name">
-        <strong>{o.order_name || <>{o.factory} <em>sem nome</em></>}</strong>
-        <span>
-          {showStage && stage && <><i className="ob-dot" style={{ '--stage': STAGE_VAR[o.status] }} />{stage.label} · </>}
-          {o.factory}
-          {(o.order_date || o.created_at) && <> · pedido {formatDate(o.order_date || o.created_at, 'full')}</>}
-        </span>
-      </div>
-
-      <div className="ob-pieces num">
+      <div className="ob-pieces num" role="cell">
         <strong>{pieces.toLocaleString('pt-BR')}</strong>
-        <span>{nModels} modelo{nModels !== 1 ? 's' : ''} · {nColors} cor{nColors !== 1 ? 'es' : ''}</span>
+        <span>{plural(nColors, 'cor', 'cores')}</span>
       </div>
 
-      <div className="ob-timing" onClick={(e) => e.stopPropagation()}>
+      <div className="ob-progress-cell" role="cell" onClick={(e) => e.stopPropagation()}>
         <Timing order={o} leadTimeByFactory={leadTimeByFactory} onArrivalSave={onArrivalSave} onMarkArrived={onMarkArrived} />
       </div>
 
-      {showPrices && <div className="ob-pay"><Payment order={o} rate={rate} /></div>}
+      {showPrices && <div className="ob-pay" role="cell"><Payment order={o} rate={rate} /></div>}
 
-      <span className="ob-chev" aria-hidden>›</span>
+      <svg className="ob-chev" viewBox="0 0 20 20" width="16" height="16" aria-hidden><path fill="currentColor" d="M7.47 4.97a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L11.44 10 7.47 6.03a.75.75 0 0 1 0-1.06Z" /></svg>
     </div>
   )
 }
 
-// Coluna "Prazo e chegada": o que importa muda conforme a etapa
+// Coluna "Andamento": o que importa muda conforme a etapa
 function Timing({ order: o, leadTimeByFactory, onArrivalSave, onMarkArrived }) {
   const arrivalMs = parseDateLocal(o.expected_arrival)?.getTime() ?? null
   const daysToArrival = arrivalMs != null ? Math.round((arrivalMs - today()) / DAY) : null
   const editor = onArrivalSave && (o.status === 'manufacturing' || o.status === 'in_transit')
-    ? <ArrivalEditor value={o.expected_arrival || ''} overdue={daysToArrival != null && daysToArrival < 0} compact onSave={(d) => onArrivalSave(o, d)} />
+    ? <ArrivalEditor value={o.expected_arrival || ''} overdue={daysToArrival != null && daysToArrival < 0} onSave={(d) => onArrivalSave(o, d)} />
     : null
 
-  if (o.status === 'draft') return <span className="ob-muted">Ainda não enviado</span>
+  if (o.status === 'draft') return <span className="ob-muted">Ainda não foi pra fábrica</span>
 
   if (o.status === 'sent') {
     const h = [...(o.status_history || [])].reverse().find(x => x?.status === 'sent')
     const since = h?.at ? new Date(h.at).getTime() : (parseDateLocal(o.created_at)?.getTime() ?? null)
     const d = since ? Math.floor((Date.now() - since) / DAY) : null
     return (
-      <>
-        <span className={d >= 30 ? 'ob-bad' : 'ob-text'}>{d != null ? `Esperando revisão há ${d} dias` : 'Em revisão'}</span>
-        {editor}
-      </>
+      <span className={d >= 30 ? 'ob-warn' : 'ob-text'}>
+        {d != null ? `Esperando confirmação há ${d} ${d === 1 ? 'dia' : 'dias'}` : 'Esperando confirmação'}
+      </span>
     )
   }
 
@@ -276,12 +382,12 @@ function Timing({ order: o, leadTimeByFactory, onArrivalSave, onMarkArrived }) {
     const pct = Math.min(100, Math.round((d.daysElapsed / d.deadlineDays) * 100))
     return (
       <>
-        <div className="ob-progress" title={`${d.daysElapsed} de ${d.deadlineDays} dias`}>
-          <i style={{ width: `${pct}%`, background: d.isLate ? 'var(--bad)' : (pct >= 80 ? 'var(--st-mfg)' : 'var(--st-mfg)') }} />
-        </div>
         <span className={d.isLate ? 'ob-bad' : 'ob-text'}>
           {d.isLate ? `Atrasado ${d.daysLate} dias` : `Dia ${d.daysElapsed} de ${d.deadlineDays}`}
         </span>
+        <div className="ob-meter" title={`${d.daysElapsed} de ${d.deadlineDays} dias de prazo`}>
+          <i style={{ width: `${pct}%`, background: d.isLate ? 'var(--bad)' : 'var(--st-mfg)' }} />
+        </div>
         {editor}
       </>
     )
@@ -300,40 +406,35 @@ function Timing({ order: o, leadTimeByFactory, onArrivalSave, onMarkArrived }) {
         <div className="ob-inline">
           {editor}
           {overdue && onMarkArrived && (
-            <button type="button" className="ob-btn ob-btn-good" onClick={() => onMarkArrived(o)}>Chegou</button>
+            <button type="button" className="ob-btn good" onClick={() => onMarkArrived(o)}>Chegou</button>
           )}
         </div>
       </>
     )
   }
 
-  // concluído
   const done = [...(o.status_history || [])].reverse().find(x => x?.status === 'completed')
-  return <span className="ob-muted">{done ? `Chegou em ${formatDate(done.at, 'full')}` : 'Concluído'}</span>
+  return <span className="ob-muted">{done ? `Chegou em ${formatDate(done.at, 'full')}` : (o.status === 'cancelled' ? 'Cancelado' : 'Concluído')}</span>
 }
 
-// Coluna "Pagamento": barra + quanto falta (USD e BRL)
+// Coluna "Pagamento": quanto falta em destaque; barra só quando já pagou algo
 function Payment({ order: o, rate }) {
   const b = computeOrderBalance(o, rate)
-  if (b.isManuallySettled || (b.isSettled && b.total > 0)) {
-    return <span className="ob-good">Quitado</span>
-  }
-  if (!(b.total > 0)) return <span className="ob-muted">Sem preço</span>
+  if (b.isManuallySettled || (b.isSettled && b.total > 0)) return <span className="ob-pill good">Quitado</span>
+  if (!(b.total > 0)) return <span className="ob-muted">Sem preço ainda</span>
   const pct = Math.max(0, Math.min(100, Math.round(b.percentPaid)))
   return (
     <>
-      <div className="ob-progress pay" title={`${pct}% pago`}>
-        <i style={{ width: `${pct}%` }} />
-      </div>
       <span className="ob-text">
         <strong>falta {usd(b.remainingUsd)}</strong>
-        {b.remainingBrl > 0 && <span className="ob-muted"> · {brl(b.remainingBrl)}</span>}
+        {b.remainingBrl > 0 && <span className="ob-muted"> ≈ {brl(b.remainingBrl)}</span>}
       </span>
+      {pct > 0 && <div className="ob-meter pay" title={`${pct}% pago`}><i style={{ width: `${pct}%` }} /></div>}
       <span className="ob-muted">
-        {pct}% de {usd(b.total)}{!b.isFullyConfirmed && ' (estimado)'}
-        {b.unpricedQty > 0 && <span className="ob-warn"> · {b.unpricedQty} pç sem preço</span>}
+        {pct > 0 ? `${pct}% pago de ${usd(b.total)}` : `nada pago de ${usd(b.total)}`}
+        {!b.isFullyConfirmed && <span className="ob-tag" title="Total calculado pelo FOB × fator — a trading ainda não lançou os valores finais">estimado</span>}
       </span>
+      {b.unpricedQty > 0 && <span className="ob-tag warn">{plural(b.unpricedQty, 'peça', 'peças')} sem preço</span>}
     </>
   )
 }
-

@@ -7,7 +7,7 @@ import { CompletionSummaryModal } from '../components/orders/CompletionSummaryMo
 import { OrderDetail } from '../components/orders/OrderDetail'
 // v13.54 — OrderModal clássico aposentado: criação E edição usam o OrderCreator
 import { OrdersBoard } from '../components/orders/OrdersBoard'
-import { sortOrders, SORT_MODES } from '../lib/orderSort'
+import { SORT_MODES } from '../lib/orderSort'
 import { matchesEntity, slugifyName, hashForEntity, hashForPage, pageForHash } from '../lib/router'
 import { OrderCreator } from '../components/orders/OrderCreator'
 import {
@@ -37,7 +37,8 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   const [factories, setFactories] = useState([])
   const [colors, setColors] = useState([])
   const [loading, setLoading] = useState(initialData.length === 0)
-  const [filter, setFilter] = useStickyFilter('orders.filter', 'all')
+  // v13.81 — abas: 'active' (padrão) | etapa | 'all' | 'trash'
+  const [filter, setFilter] = useStickyFilter('orders.tab', 'active')
   // v13.72 — ordem da lista. Preferência (não filtro): persiste entre sessões e
   // não é apagada pelo "limpar filtros".
   const [sortMode, setSortMode] = useState(() => {
@@ -139,13 +140,9 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   // Suporta filter especial 'trash' que mostra pedidos da lixeira em vez dos ativos
   const filtered = filter === 'trash'
     ? trashOrders
-    : (filter === 'all' ? orders : orders.filter(o => o.status === filter))
+    : orders
   const isViewingTrash = filter === 'trash'
 
-  // v13.72 — a lista vinha por created_at (data de DIGITAÇÃO), o que embaralhava
-  // pedidos retroativos. Agora: grupos de urgência no modo inteligente.
-  const sortCtx = { rate, leadTimeByFactory }
-  const sortedFlat = sortMode === 'smart' ? filtered : sortOrders(filtered, sortMode, sortCtx)
 
   const save = async (order) => {
     try {
@@ -815,35 +812,12 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   if (loading) return <SkeletonList rows={5} />
 
   return <div>
-    {/* v13.76 — barra enxuta: as ETAPAS (dentro da lista) viraram o filtro */}
-    <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
-      {isViewingTrash ? (
-        <button className="ob-btn" onClick={() => setFilter('all')}>← Voltar aos pedidos</button>
-      ) : (
-        <>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-2)' }}>
-            Organizar
-            <select
-              className="field field-sm"
-              value={sortMode}
-              onChange={e => changeSort(e.target.value)}
-              aria-label="Como organizar a lista de pedidos"
-              style={{ width: 'auto' }}
-            >
-              {SORT_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-          </label>
-          <button
-            className="ob-btn"
-            onClick={() => setFilter('trash')}
-            title="Pedidos movidos pra lixeira (recuperáveis por 30 dias)"
-          >
-            Lixeira{trashLoaded ? ` (${trashOrders.length})` : ''}
-          </button>
-          <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo pedido</button>
-        </>
-      )}
-    </div>
+    {/* v13.81 — fora da lixeira, a busca/ordem/novo pedido moram dentro da lista */}
+    {isViewingTrash && (
+      <div className="toolbar">
+        <button className="ob-btn" onClick={() => setFilter('active')}>← Voltar aos pedidos</button>
+      </div>
+    )}
 
     {/* Banner informativo quando vendo lixeira */}
     {isViewingTrash && (
@@ -930,10 +904,29 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         perm={perm}
         rate={rate}
         leadTimeByFactory={leadTimeByFactory}
-        mode={sortMode === 'smart' ? 'stage' : 'flat'}
-        flatOrders={sortedFlat}
-        stageFilter={filter}
-        onStageFilter={setFilter}
+        colors={colors}
+        sortMode={sortMode}
+        tab={filter}
+        onTab={setFilter}
+        actions={<>
+          <select
+            className="ob-select"
+            value={sortMode}
+            onChange={e => changeSort(e.target.value)}
+            aria-label="Ordenar a lista de pedidos"
+            title="Ordenar"
+          >
+            {SORT_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+          <button
+            className="ob-select"
+            onClick={() => setFilter('trash')}
+            title="Pedidos movidos pra lixeira (recuperáveis por 30 dias)"
+          >
+            Lixeira{trashLoaded ? ` (${trashOrders.length})` : ''}
+          </button>
+          <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo pedido</button>
+        </>}
         onOpen={(o) => setDetail(o)}
         onArrivalSave={perm.orders ? updateArrival : undefined}
         onMarkArrived={perm.orders ? (o) => changeStatus(o, 'completed') : undefined}
