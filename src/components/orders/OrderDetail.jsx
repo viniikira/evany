@@ -15,6 +15,7 @@ import { addPayment, updatePayment, deletePayment, updateOrder } from '../../lib
 import { computeOrderBalance } from '../../lib/financial'
 import { TradingValuesModal } from './TradingValuesModal'
 import { ReservesSection } from './ReservesSection'
+import { UnitCostSection } from './UnitCostSection'
 import { uploadReceipt, deleteReceipt } from '../../lib/storage'
 import { generateOrderPDF } from '../../lib/pdf'
 import { generateFactorySheet } from '../../lib/factorySheet'
@@ -557,6 +558,16 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 </div>
               )}
             </div>
+          )}
+
+          {/* v13.82 — quanto saiu cada peça (real quando quitado; previsão antes) */}
+          {isM && perm.payments && perm.prices && (
+            <UnitCostSection
+              order={o}
+              products={products}
+              rate={rate}
+              onEditPrices={!readOnly && onEditPrices ? onEditPrices : null}
+            />
           )}
 
           {/* Status */}

@@ -17,6 +17,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { groupOrdersByStage, buildAttention, sortOrders, ORDER_STAGES } from '../../lib/orderSort'
 import { computeOrderBalance } from '../../lib/financial'
+import { computeUnitCosts } from '../../lib/unitCost'
+import { formatFixedBR } from '../../lib/moneyMask'
 import { computeOrderDelay } from '../../lib/pendencias'
 import { formatDate, parseDateLocal } from '../../lib/utils'
 import { ArrivalEditor } from './ArrivalEditor'
@@ -420,7 +422,18 @@ function Timing({ order: o, leadTimeByFactory, onArrivalSave, onMarkArrived }) {
 // Coluna "Pagamento": quanto falta em destaque; barra só quando já pagou algo
 function Payment({ order: o, rate }) {
   const b = computeOrderBalance(o, rate)
-  if (b.isManuallySettled || (b.isSettled && b.total > 0)) return <span className="ob-pill good">Quitado</span>
+  if (b.isManuallySettled || (b.isSettled && b.total > 0)) {
+    // v13.82 — quitado: já mostra a quanto saiu cada peça (custo real)
+    const c = computeUnitCosts(o, rate)
+    return (
+      <>
+        <span className="ob-pill good">Quitado</span>
+        {c.kind === 'real' && c.pieces > 0 && (
+          <span className="ob-muted">saiu R$ {formatFixedBR(c.avgBrlUnit, 2)} por peça</span>
+        )}
+      </>
+    )
+  }
   if (!(b.total > 0)) return <span className="ob-muted">Sem preço ainda</span>
   const pct = Math.max(0, Math.min(100, Math.round(b.percentPaid)))
   return (

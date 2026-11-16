@@ -1,0 +1,82 @@
+/* ═══════════════════════════════════════════════════════════════════
+   v13.82 — Custo por peça do pedido (UnitCostSection) — prefixo uc-
+   Mesmo vocabulário da lista de pedidos: Inter, números tabulares,
+   linhas de 1px, verde só quando o custo é real (pedido quitado).
+   ═══════════════════════════════════════════════════════════════════ */
+.uc {
+  margin-top: 14px; padding: 16px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; font-family: var(--font-ui); font-variant-numeric: tabular-nums; color: var(--text);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.uc .num { text-align: right; white-space: nowrap }
+.uc .muted { color: var(--text-2) }
+.uc .strong { font-weight: 600 }
+.uc small { font-size: 11px; font-weight: 400; color: var(--text-2) }
+.uc small.warn { color: var(--warn-ink) }
+
+.uc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap }
+.uc-head > div:first-child { display: flex; align-items: center; gap: 10px; flex-wrap: wrap }
+.uc-head h3 { font-size: 15px; font-weight: 600; margin: 0 }
+.uc-tag {
+  font-size: 12px; font-weight: 600; border-radius: 999px; padding: 0 9px; line-height: 21px;
+  background: var(--line); color: var(--text-2);
+}
+.uc-tag.good { background: var(--good-bg); color: var(--good) }
+.uc-head-actions { display: flex; gap: 6px }
+.uc-btn {
+  font: inherit; font-size: 12px; font-weight: 500; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 7px; padding: 3px 10px; line-height: 20px; cursor: pointer; white-space: nowrap;
+}
+.uc-btn:hover { background: var(--hover); border-color: var(--text-muted) }
+.uc-link {
+  font: inherit; font-weight: 600; color: var(--primary); background: none; border: 0; padding: 0;
+  cursor: pointer; text-decoration: underline;
+}
+
+/* ── números principais ── */
+.uc-kpis { display: grid; grid-template-columns: 1.25fr repeat(3, minmax(0, 1fr)); gap: 10px }
+.uc-kpi {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+}
+.uc-kpi span { font-size: 12px; font-weight: 500; color: var(--text-2) }
+.uc-kpi strong { font-size: 16px; font-weight: 600; white-space: nowrap }
+.uc-kpi em { font-style: normal; font-size: 12px; color: var(--text-2) }
+.uc-kpi.lead strong { font-size: 22px; letter-spacing: -0.01em }
+.uc.real .uc-kpi.lead { background: var(--good-bg); border-color: color-mix(in srgb, var(--good) 30%, transparent) }
+.uc.real .uc-kpi.lead strong { color: var(--good) }
+
+/* ── avisos ── */
+.uc-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px }
+.uc-notes li { font-size: 13px; line-height: 1.45; border-radius: 8px; padding: 8px 12px; background: var(--hover); color: var(--text-2) }
+.uc-notes li strong { color: var(--text) }
+.uc-notes li.warn { background: var(--warn-bg); color: var(--warn-ink) }
+.uc-notes li.warn strong { color: inherit }
+
+/* ── tabela por modelo ── */
+.uc-table { border: 1px solid var(--line); border-radius: 10px; overflow: hidden }
+.uc-row {
+  display: grid; align-items: center; gap: 14px; padding: 8px 12px; font-size: 13px;
+  grid-template-columns: minmax(150px, 1.8fr) 60px minmax(110px, 1fr) minmax(90px, .8fr) minmax(110px, 1fr);
+  border-top: 1px solid var(--line);
+}
+.uc-row-head { border-top: 0; background: var(--hover); font-size: 12px; font-weight: 500; color: var(--text-2); padding-top: 6px; padding-bottom: 6px }
+.uc-name { display: flex; align-items: center; gap: 10px; min-width: 0 }
+.uc-name img, .uc-nophoto { width: 28px; height: 36px; border-radius: 5px; object-fit: cover; background: var(--line); flex-shrink: 0 }
+.uc-name > span { display: flex; flex-direction: column; gap: 1px; min-width: 0 }
+.uc-name strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.uc-name em { font-style: normal; font-size: 12px; color: var(--text-2) }
+.uc-color { background: var(--hover); padding-top: 5px; padding-bottom: 5px; font-size: 12px }
+.uc-color-name { padding-left: 38px; color: var(--text-2); overflow-wrap: anywhere }
+.uc-total { background: var(--hover); font-weight: 600 }
+
+.uc-how { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-2) }
+.uc-how strong { color: var(--text); font-weight: 600 }
+
+@media (max-width: 720px) {
+  .uc-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+  .uc-kpi.lead { grid-column: 1 / -1 }
+  .uc-row { grid-template-columns: minmax(0, 1fr) 46px 96px; gap: 8px }
+  .uc-row > :nth-child(4), .uc-row > :nth-child(5) { display: none }
+  .uc-total > :nth-child(3) { display: block }
+}
