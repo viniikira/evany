@@ -423,13 +423,17 @@ function Timing({ order: o, leadTimeByFactory, onArrivalSave, onMarkArrived }) {
 function Payment({ order: o, rate }) {
   const b = computeOrderBalance(o, rate)
   if (b.isManuallySettled || (b.isSettled && b.total > 0)) {
-    // v13.82 — quitado: já mostra a quanto saiu cada peça (custo real)
+    // v13.83 — quitado: faixa do custo real por peça (da mais barata à mais cara)
     const c = computeUnitCosts(o, rate)
     return (
       <>
         <span className="ob-pill good">Quitado</span>
-        {c.kind === 'real' && c.pieces > 0 && (
-          <span className="ob-muted">saiu R$ {formatFixedBR(c.avgBrlUnit, 2)} por peça</span>
+        {c.kind === 'real' && c.cheapest && (
+          <span className="ob-muted">
+            {c.priciest.brlUnit - c.cheapest.brlUnit < 0.01
+              ? `cada peça saiu por R$ ${formatFixedBR(c.cheapest.brlUnit, 2)}`
+              : `peças de R$ ${formatFixedBR(c.cheapest.brlUnit, 2)} a R$ ${formatFixedBR(c.priciest.brlUnit, 2)}`}
+          </span>
         )}
       </>
     )

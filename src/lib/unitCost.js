@@ -153,8 +153,17 @@ export function computeUnitCosts(order, rate) {
     }
   })
 
+  // A peça mais barata e a mais cara do pedido (ela quer o valor de CADA uma,
+  // não a média: "tem peça que é mais cara, tem peça que é mais barata")
+  const pricedOut = outLines.filter(l => l.hasPrice)
+  const pickBy = (cmp) => pricedOut.reduce((best, l) => (!best || cmp(l.brlUnit, best.brlUnit) ? l : best), null)
+  const cheapest = pickBy((a, b) => a < b)
+  const priciest = pickBy((a, b) => a > b)
+
   return {
     kind,
+    cheapest,
+    priciest,
     pieces,
     totalBrl: Math.round(totalBrl * 100) / 100,
     totalUsd: Math.round(totalUsd * 100) / 100,

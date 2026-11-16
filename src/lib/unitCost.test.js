@@ -83,6 +83,11 @@ describe('computeUnitCosts — pedido quitado com valores da trading', () => {
     expect(a.qty).toBe(150)
     expect(b.uniform).toBe(true)
   })
+  it('aponta a peça mais barata e a mais cara', () => {
+    expect(r.cheapest.colorCode).toBe('613')
+    expect(r.priciest.colorCode).toBe('COPPER')
+    expect(r.priciest.brlUnit).toBeGreaterThan(r.cheapest.brlUnit)
+  })
   it('fator real sobre o FOB', () => {
     // FOB = 150×15 + 50×10 = 2750 → 4700 / 2750
     expect(r.realMultiplier).toBeCloseTo(4700 / 2750, 6)
