@@ -117,7 +117,7 @@ function sanitizeText(v) {
 
 // Remove campos que não devem ir pro INSERT/UPDATE e sanitiza vazios.
 function cleanProductPayload(product) {
-  const NUMERIC_KEYS = new Set(['price_usd'])
+  const NUMERIC_KEYS = new Set(['price_usd', 'price_brl'])
   const TEXT_KEYS = new Set(['collection','factory','factory_code','finish_type',
     'reparticao','reparticao_size','reparticao_acabamento','hair_type','length',
     'material','notes','card_image_url','sku'])
@@ -127,6 +127,7 @@ function cleanProductPayload(product) {
     'material','notes','card_image_url','photos','sku','pre_plucked','price_usd',
     'internal_notes','timeline','created_by','from_idea_id',
     'kind',  // v13.84 — 'own' (fabricação própria) | 'brand' (modelo de marca parceira)
+    'price_brl',  // v13.85 — preço atual do modelo de marca (tabela da marca, em reais)
   ]
   const out = {}
   for (const k of allowedKeys) {

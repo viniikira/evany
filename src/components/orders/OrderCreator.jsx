@@ -272,8 +272,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
           : (!isIdea && intelByProduct.get(source.id)?.price?.lastPrice != null
               ? intelByProduct.get(source.id).price.lastPrice
               : ''),
-        // v13.84 — marca: parte do último preço pago por este modelo (editável)
-        price_brl: isBrand ? (lastBrlPrice(source.id) ?? '') : '',
+        // v13.84/85 — marca: parte do preço atual do cadastro; sem ele, do último pago (editável)
+        price_brl: isBrand ? (Number(source.price_brl) > 0 ? Number(source.price_brl) : (lastBrlPrice(source.id) ?? '')) : '',
         requirements: '',  // v13.58 — texto pra fábrica na planilha (por modelo)
         colors: [],
       }],
@@ -352,9 +352,10 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         product_id: prod.id,
         idea_id: null,
         idea_name_snapshot: null,
-        price_usd: (prod.price_usd != null && prod.price_usd !== '')
+        price_usd: isBrand ? '' : (prod.price_usd != null && prod.price_usd !== '')
           ? prod.price_usd
           : (intelByProduct.get(prod.id)?.price?.lastPrice ?? ''),
+        price_brl: isBrand ? (Number(prod.price_brl) > 0 ? Number(prod.price_brl) : (lastBrlPrice(prod.id) ?? '')) : '',
         requirements: '',
         colors: byColor,
       }],

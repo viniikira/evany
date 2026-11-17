@@ -654,6 +654,7 @@ function ProductModal({ product, collections, factories, colors, names, existing
       sku: base.sku || '',
       pre_plucked: !!base.pre_plucked,
       price_usd: base.price_usd || '',
+      price_brl: base.price_brl ?? '',
       color_variants: base.color_variants || [],
       suppliers: base.suppliers || [],
     }
@@ -1157,7 +1158,14 @@ function ProductModal({ product, collections, factories, colors, names, existing
               <label className="field-label">{isBrand ? 'Código na marca' : 'Código Fábrica'}</label>
               <input className="field" value={f.factory_code || ''} onChange={e => s('factory_code', e.target.value)} />
             </div>
-            {/* marca: o preço muda a cada pedido (orçamento em reais) — não fica no cadastro */}
+            {/* v13.85 — marca: preço atual da tabela da marca, em reais (vira o preço
+                inicial do pedido; cada pedido pode ter o seu) */}
+            {perm.prices && isBrand && (
+              <div className="form-group">
+                <label className="field-label">Preço atual (R$ por peça)</label>
+                <MoneyInput prefix="R$" value={f.price_brl ?? ''} onChange={v => s('price_brl', v ?? '')} ariaLabel="Preço atual por peça em reais" />
+              </div>
+            )}
             {perm.prices && !isBrand && (
               <div className="form-group">
                 <label className="field-label">Preço USD</label>
