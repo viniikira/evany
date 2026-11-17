@@ -37,6 +37,9 @@ input.orv-money.sm { padding: 4px 8px }
   border-top: 1px solid var(--line);
 }
 .orv-table.no-price .orv-row { grid-template-columns: minmax(0, 1fr) 80px }
+/* v13.84 — pedido de marca parceira: só preço por peça em reais */
+.orv-table.brl .orv-row { grid-template-columns: minmax(130px, 1.6fr) 70px 150px minmax(110px, 1fr) }
+.orv-summary.brl { grid-template-columns: repeat(3, minmax(0, 1fr)) }
 .orv-head { border-top: 0; background: var(--hover); font-size: 12px; font-weight: 500; color: var(--text-2); padding-top: 6px; padding-bottom: 6px }
 .orv-color { display: flex; align-items: center; gap: 7px; min-width: 0; line-height: 1.25 }
 .orv-factor { color: var(--text-2); font-size: 12px }
@@ -56,7 +59,8 @@ input.orv-money.sm { padding: 4px 8px }
 .orv-summary em { font-style: normal; font-size: 12px; color: var(--text-2) }
 
 @media (max-width: 760px) {
-  .orv-row { grid-template-columns: 1fr 50px 1fr; }
+  .orv-row, .orv-table.brl .orv-row { grid-template-columns: 1fr 50px 1fr; }
+  .orv-summary.brl { grid-template-columns: 1fr }
   .orv-head { display: none }
   .orv-summary { grid-template-columns: repeat(2, minmax(0, 1fr)) }
 }
@@ -68,6 +72,18 @@ input.orv-money.sm { padding: 4px 8px }
 }
 .orv-qty:focus { border-color: var(--primary); outline: none }
 .orv-qty.zero { color: var(--text-muted); border-style: dashed }
+
+/* v13.84 — resumo do pedido de marca parceira (tudo em reais) */
+.brl-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-variant-numeric: tabular-nums }
+.brl-summary > div { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px }
+.brl-summary span { font-size: 12px; font-weight: 500; color: var(--text-2) }
+.brl-summary strong { font-size: 17px; font-weight: 600; white-space: nowrap }
+.brl-summary em { font-style: normal; font-size: 12px; color: var(--text-2) }
+.brl-summary .good { background: var(--good-bg); border-color: transparent }
+.brl-summary .good strong { color: var(--good) }
+.brl-summary .bad { background: var(--bad-bg); border-color: transparent }
+.brl-summary .bad strong { color: var(--bad) }
+@media (max-width: 560px) { .brl-summary { grid-template-columns: 1fr } }
 
 /* v13.80 — próximo passo do pedido (NextStepBar) e menu "Mais" */
 .nsb {

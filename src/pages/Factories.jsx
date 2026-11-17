@@ -13,6 +13,7 @@ import {
 import { toastError } from '../lib/errors'
 import { PROD_ST, ORDER_ST } from '../lib/constants'
 import { uid, formatDate, UC } from '../lib/utils'
+import { SUPPLIER_KINDS } from '../lib/suppliers'
 
 export function FactoriesPage({ user, perm }) {
   const [factories, setFactories] = useState([])
@@ -65,10 +66,11 @@ export function FactoriesPage({ user, perm }) {
   const save = async (f) => {
     try {
       await upsertFactory(f)
-      writeLog({ userId: user.id, userName: user.name, action: f.id ? 'editou fábrica' : 'criou fábrica', target: f.name })
+      const what = f.kind === 'brand' ? 'marca' : 'fábrica'
+      writeLog({ userId: user.id, userName: user.name, action: f.id ? `editou ${what}` : `criou ${what}`, target: f.name })
       setModal(null)
       await load()
-      toast.push('Fábrica salva', { kind: 'success' })
+      toast.push(f.kind === 'brand' ? 'Marca salva' : 'Fábrica salva', { kind: 'success' })
     } catch (e) { toastError(toast, e) }
   }
 
@@ -85,7 +87,7 @@ export function FactoriesPage({ user, perm }) {
   return <div>
     <div className="toolbar">
       <div>
-        {factories.length >= 2 && (
+        {factories.filter(f => f.kind !== 'brand').length >= 2 && (
           <button
             className="btn btn-outline"
             onClick={() => setComparatorOpen(true)}
@@ -93,10 +95,22 @@ export function FactoriesPage({ user, perm }) {
           >📊 Comparar fábricas</button>
         )}
       </div>
-      <button className="btn btn-primary" onClick={() => setModal({})}>+ Nova Fábrica</button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn btn-outline" onClick={() => setModal({ kind: 'brand' })} title="Marca que vende modelos prontos (ex.: Slick) — preço em reais">+ Nova marca parceira</button>
+        <button className="btn btn-primary" onClick={() => setModal({ kind: 'factory' })}>+ Nova Fábrica</button>
+      </div>
     </div>
     {loading ? <SkeletonList rows={4} />
-    : <div className="grid-2">{factories.map(f => {
+    : SUPPLIER_KINDS.map(kind => {
+      const list = factories.filter(f => (f.kind === 'brand' ? 'brand' : 'factory') === kind.id)
+      if (list.length === 0) return null
+      return (
+      <section key={kind.id} style={{ marginBottom: 22 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '0 2px 10px' }}>
+          <h3 style={{ margin: 0, fontSize: 16 }}>{kind.plural}</h3>
+          <span className="text-muted text-sm">{kind.hint}</span>
+        </div>
+    <div className="grid-2">{list.map(f => {
       const counts = countsByFactory.get(f.name) || { products: [], orders: [] }
       const contactCount = Array.isArray(f.wechats) ? f.wechats.length : (f.contact ? 1 : 0)
       return (
@@ -127,7 +141,10 @@ export function FactoriesPage({ user, perm }) {
           </div>
         </div>
       )
-    })}</div>}
+    })}</div>
+      </section>
+      )
+    })}
     {modal && <FactoryModal f={modal} onSave={save} onClose={() => setModal(null)} />}
     {viewing && <FactoryDetailModal factory={viewing} products={countsByFactory.get(viewing.name)?.products || []} orders={countsByFactory.get(viewing.name)?.orders || []} onClose={() => setViewing(null)} />}
     {dashboardFor && (
@@ -141,7 +158,7 @@ export function FactoriesPage({ user, perm }) {
     )}
     {comparatorOpen && (
       <FactoriesComparator
-        factories={factories}
+        factories={factories.filter(f => f.kind !== 'brand')}
         orders={orders}
         onClose={() => setComparatorOpen(false)}
       />
@@ -156,7 +173,7 @@ function FactoryDetailModal({ factory, products, orders, onClose }) {
 
   return (
     <Modal onClose={onClose} width={750} allowOutsideClose>
-      <MH title={`🏭 ${factory.name}`} onClose={onClose} />
+      <MH title={`${factory.kind === 'brand' ? '🏷️' : '🏭'} ${factory.name}`} onClose={onClose} />
       <MB>
         <div className="text-muted text-sm" style={{ marginBottom: 10 }}>{factory.country}</div>
 
@@ -258,7 +275,8 @@ function FactoryModal({ f, onSave, onClose }) {
   // Cada contato: { type: 'wechat'|'whatsapp'|'email'|'phone', label?, value }
   const [form, setForm] = useState({
     name: f.name || '',
-    country: f.country || 'China',
+    kind: f.kind === 'brand' ? 'brand' : 'factory',
+    country: f.country || (f.kind === 'brand' ? '' : 'China'),
     notes: f.notes || '',
     id: f.id,
     contacts: Array.isArray(f.wechats) && f.wechats.length
@@ -299,8 +317,20 @@ function FactoryModal({ f, onSave, onClose }) {
   ]
 
   return <Modal onClose={onClose} width={560} isDirty={dirty}>
-    <MH title={f.id ? 'Editar Fábrica' : 'Nova Fábrica'} onClose={onClose} />
+    <MH title={form.kind === 'brand' ? (f.id ? 'Editar marca parceira' : 'Nova marca parceira') : (f.id ? 'Editar Fábrica' : 'Nova Fábrica')} onClose={onClose} />
     <MB>
+      {/* v13.84 — fábrica (modelos exclusivos, dólar) × marca parceira (modelos prontos, reais) */}
+      <div className="form-group">
+        <label className="field-label">Tipo</label>
+        <div className="chip-bar" style={{ margin: 0 }}>
+          {SUPPLIER_KINDS.map(k => (
+            <button key={k.id} type="button" className={`chip-filter${form.kind === k.id ? ' on' : ''}`} onClick={() => s('kind', k.id)}>
+              {k.label}
+            </button>
+          ))}
+        </div>
+        <div className="text-muted text-xs" style={{ marginTop: 4 }}>{SUPPLIER_KINDS.find(k => k.id === form.kind)?.hint}</div>
+      </div>
       <div className="form-row">
         <div className="form-group"><label className="field-label">Nome *</label><input className="field" value={form.name} onChange={e => s('name', e.target.value)} autoFocus /></div>
         <div className="form-group"><label className="field-label">País</label><input className="field" value={form.country} onChange={e => s('country', e.target.value)} /></div>

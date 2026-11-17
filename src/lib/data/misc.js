@@ -80,6 +80,8 @@ export async function upsertFactory(factory) {
     contact: factory.contact || null,
     notes: factory.notes || null,
     wechats: factory.wechats || [],
+    // v13.84 — 'factory' (fábrica, modelos exclusivos) | 'brand' (marca parceira, modelos prontos)
+    kind: factory.kind === 'brand' ? 'brand' : 'factory',
   }
   const { data, error } = await supabase.from('factories').upsert(payload).select().single()
   if (error) throw error

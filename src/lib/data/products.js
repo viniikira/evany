@@ -125,7 +125,8 @@ function cleanProductPayload(product) {
     'name','status','collection','factory','factory_code','finish_type',
     'reparticao','reparticao_size','reparticao_acabamento','hair_type','length',
     'material','notes','card_image_url','photos','sku','pre_plucked','price_usd',
-    'internal_notes','timeline','created_by','from_idea_id'
+    'internal_notes','timeline','created_by','from_idea_id',
+    'kind',  // v13.84 — 'own' (fabricação própria) | 'brand' (modelo de marca parceira)
   ]
   const out = {}
   for (const k of allowedKeys) {

@@ -16,6 +16,7 @@ export function flattenPayments(orders = []) {
         _factory: o.factory,
         _orderName: o.order_name || o.factory,
         _orderStatus: o.status,
+        _currency: o.currency === 'BRL' ? 'BRL' : 'USD',  // v13.84 — pedido de marca em reais
       })
     }
   }
@@ -144,6 +145,7 @@ export const DEFAULT_TRADING_FACTOR = 1.65
  * @returns {Array<{itemId, colorCode, qty, fobUnit, finalUnit, isConfirmed, fobTotal, finalTotal, multiplier}>}
  */
 export function computeOrderLines(order) {
+  if (order?.currency === 'BRL') return computeOrderLinesBRL(order)
   const factor = num(order?.conversion_factor) || DEFAULT_TRADING_FACTOR
   const lines = []
   for (const it of (order?.items || [])) {
@@ -174,6 +176,36 @@ export function computeOrderLines(order) {
     } else {
       push(null, Number(it.quantity || 0), null, null)
     }
+  }
+  return lines
+}
+
+// v13.84 — pedido de MARCA PARCEIRA cobrado em reais: o preço por peça vem
+// do orçamento de cada pedido (colors[].price_brl, senão o do modelo
+// item.price_brl). Não existe FOB nem trading: o preço É o valor final.
+function computeOrderLinesBRL(order) {
+  const lines = []
+  for (const it of (order?.items || [])) {
+    const itemUnit = num(it.price_brl)
+    const cls = it.colors || []
+    const push = (colorCode, qty, cUnit) => {
+      const unit = cUnit ?? itemUnit
+      const isConfirmed = unit != null && unit > 0
+      const finalUnit = isConfirmed ? unit : 0
+      lines.push({
+        itemId: it.id,
+        colorCode: colorCode || null,
+        qty,
+        fobUnit: 0,
+        finalUnit,
+        isConfirmed,
+        fobTotal: 0,
+        finalTotal: finalUnit * qty,
+        multiplier: null,
+      })
+    }
+    if (cls.length > 0) for (const c of cls) push(c.code, Number(c.qty || 0), num(c.price_brl))
+    else push(null, Number(it.quantity || 0), null)
   }
   return lines
 }
@@ -214,6 +246,8 @@ export function computeOrderFinal(order) {
     unpricedLines: unpriced.length,
     // Multiplicador efetivo do pedido (final ÷ FOB, só nas linhas com FOB)
     multiplier: fobBase > 0 ? finalOnFob / fobBase : null,
+    // v13.84 — moeda dos valores acima (pedido de marca: reais)
+    currency: order?.currency === 'BRL' ? 'BRL' : 'USD',
   }
 }
 
@@ -224,6 +258,7 @@ export function computeOrderFinal(order) {
  * @param {number} rate cotação atual pra estimar o que falta em BRL
  */
 export function computeOrderBalance(order, rate) {
+  if (order?.currency === 'BRL') return computeOrderBalanceBRL(order, rate)
   const fin = computeOrderFinal(order)
   const paidUsd = computeOrderPaid(order)
   const paidBrl = (order?.payments || []).reduce((a, p) => a + (num(p.amount_brl) || 0), 0)
@@ -249,6 +284,50 @@ export function computeOrderBalance(order, rate) {
     settledNote: order?.settled_note || null,
     // v13.68 — caixinhas: quanto do que falta já está guardado
     ...computeReserveCoverage(order, projRate > 0 ? remainingUsd * projRate : null),
+  }
+}
+
+/**
+ * v13.84 — saldo de pedido cobrado em REAIS (marca parceira).
+ * Os valores exatos estão em totalBrl / paidBrl / remainingBrl. Os campos em
+ * dólar (total, paidUsd, remainingUsd) são só o EQUIVALENTE pela cotação do
+ * dia, pra quem soma tudo junto (financeiro consolidado) continuar fechando.
+ * Pra mostrar um pedido, use orderMoney() de suppliers.js.
+ */
+function computeOrderBalanceBRL(order, rate) {
+  const fin = computeOrderFinal(order)
+  const r = num(rate) || 0
+  const toUsd = (v) => (r > 0 ? v / r : 0)
+  // Pago em reais; se só tiver dólar + câmbio (lançado à moda antiga), converte
+  const paidBrl = (order?.payments || []).reduce((a, p) => {
+    const b = num(p.amount_brl)
+    if (b > 0) return a + b
+    const u = num(p.amount_usd), pr = num(p.rate_paid)
+    return a + (u > 0 && pr > 0 ? u * pr : 0)
+  }, 0)
+  const isManuallySettled = !!order?.settled_at
+  const remainingBrl = isManuallySettled ? 0 : fin.total - paidBrl
+  return {
+    ...fin,
+    currency: 'BRL',
+    isBrl: true,
+    totalBrl: fin.total,
+    confirmedBrl: fin.confirmed,
+    total: toUsd(fin.total),
+    confirmed: toUsd(fin.confirmed),
+    estimated: toUsd(fin.estimated),
+    paidUsd: toUsd(paidBrl),
+    paidBrl,
+    avgRate: null,
+    projRate: 1,
+    remainingUsd: toUsd(remainingBrl),
+    remainingBrl,
+    percentPaid: isManuallySettled ? 100 : (fin.total > 0 ? (paidBrl / fin.total) * 100 : 0),
+    isSettled: isManuallySettled || (fin.total > 0 && remainingBrl <= 0.01),
+    isManuallySettled,
+    settledAt: order?.settled_at || null,
+    settledNote: order?.settled_note || null,
+    ...computeReserveCoverage(order, remainingBrl),
   }
 }
 
@@ -299,10 +378,10 @@ export function computePendingSummary(orders = [], rate) {
     if (o.deleted_at || o.purged_at) continue
     if (!['sent', 'manufacturing', 'in_transit', 'completed'].includes(o.status)) continue
     const b = computeOrderBalance(o, rate)
-    if (b.total <= 0) continue
+    if (!(b.total > 0) && !(b.totalBrl > 0)) continue
     totalFinal += b.total
     totalPaid += b.paidUsd
-    if (b.remainingUsd > 0.01) {
+    if (b.remainingUsd > 0.01 || (b.isBrl && b.remainingBrl > 0.01)) {
       totalRemainingUsd += b.remainingUsd
       totalRemainingBrl += b.remainingBrl || 0
       totalReservedBrl += b.reservedBrl || 0
@@ -348,8 +427,8 @@ export function computeUnpaidOrders(orders, rate) {
   for (const o of orders) {
     if (o.status !== 'manufacturing' && o.status !== 'sent' && o.status !== 'in_transit' && o.status !== 'completed') continue
     const b = computeOrderBalance(o, rate)
-    if (b.total <= 0) continue
-    if (b.remainingUsd > 0.01) {
+    if (!(b.total > 0) && !(b.totalBrl > 0)) continue
+    if (b.remainingUsd > 0.01 || (b.isBrl && b.remainingBrl > 0.01)) {
       out.push({
         id: o.id,
         order_name: o.order_name || o.factory,
@@ -367,6 +446,9 @@ export function computeUnpaidOrders(orders, rate) {
         created_at: o.created_at,
         expected_arrival: o.expected_arrival || null,
         isCritical: o.status === 'completed',
+        // v13.84 — pedido de marca: o valor exato está em reais
+        currency: b.currency || 'USD',
+        totalBrl: b.totalBrl ?? null,
       })
     }
   }
@@ -385,7 +467,9 @@ export function computeMissingReceipts(orders) {
   for (const o of orders) {
     if (o.status !== 'manufacturing' && o.status !== 'in_transit' && o.status !== 'completed') continue
     for (const p of (o.payments || [])) {
-      if (!p.receipt_url && parseFloat(p.amount_usd) > 0) {
+      // v13.84 — pedido de marca é pago só em reais
+      const paid = o.currency === 'BRL' ? parseFloat(p.amount_brl) > 0 : parseFloat(p.amount_usd) > 0
+      if (!p.receipt_url && paid) {
         count += 1
         orderIds.add(o.id)
       }

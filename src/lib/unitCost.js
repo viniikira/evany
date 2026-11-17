@@ -65,6 +65,21 @@ export function sumPaymentsForCost(payments = []) {
   return { usd, brl, count, empty, incomplete }
 }
 
+// v13.84 — pedido de marca (cobrado em reais): só o valor em R$ importa.
+// Devolve no mesmo formato, com "usd" = reais (câmbio 1), pra reaproveitar a conta.
+function sumPaymentsBRL(payments = []) {
+  let brl = 0, empty = 0, incomplete = 0, count = 0
+  for (const p of payments || []) {
+    let b = num(p.amount_brl)
+    const u = num(p.amount_usd), r = num(p.rate_paid)
+    if (!(b > 0) && !(u > 0)) { empty++; continue }
+    if (!(b > 0) && u > 0 && r > 0) b = u * r
+    if (!(b > 0)) { incomplete++; continue }
+    brl += b; count++
+  }
+  return { usd: brl, brl, count, empty, incomplete }
+}
+
 /**
  * Custo por peça de um pedido.
  * @param {object} order pedido com items e payments
@@ -74,11 +89,13 @@ export function computeUnitCosts(order, rate) {
   const bal = computeOrderBalance(order, rate)
   const lines = computeOrderLines(order).filter(l => l.qty > 0)
   const pieces = lines.reduce((a, l) => a + l.qty, 0)
-  const pay = sumPaymentsForCost(order?.payments)
-  const expectedUsd = bal.total || 0
+  // v13.84 — pedido em reais: a mesma conta com câmbio 1 (sem dólar no meio)
+  const isBrl = order?.currency === 'BRL'
+  const pay = isBrl ? sumPaymentsBRL(order?.payments) : sumPaymentsForCost(order?.payments)
+  const expectedUsd = (isBrl ? bal.totalBrl : bal.total) || 0
   const coverage = expectedUsd > 0 ? pay.usd / expectedUsd : null
-  const paidRate = pay.usd > 0 ? pay.brl / pay.usd : null
-  const projRate = num(order?.budget_rate) || paidRate || num(rate) || 0
+  const paidRate = isBrl ? null : (pay.usd > 0 ? pay.brl / pay.usd : null)
+  const projRate = isBrl ? 1 : (num(order?.budget_rate) || paidRate || num(rate) || 0)
 
   // ── Em que situação o pedido está
   let kind, missingPayments = false
@@ -162,6 +179,7 @@ export function computeUnitCosts(order, rate) {
 
   return {
     kind,
+    currency: isBrl ? 'BRL' : 'USD',
     cheapest,
     priciest,
     pieces,

@@ -55,14 +55,18 @@ function storeOutlook(store, eta) {
 }
 
 export default function ProducaoPage({
-  products = [],
-  orders = [],
+  products: allProducts = [],
+  orders: allOrders = [],
   colors = [],
   factories: factoriesProp,
   perm = {},
   shopifyCache = null,
   onOpenOrder,
 }) {
+  // v13.84 — Produção é só da fabricação própria: modelos e pedidos de MARCA
+  // PARCEIRA (ex.: Slick) não entram aqui (ficam em Pedidos → Marcas parceiras)
+  const products = useMemo(() => allProducts.filter(p => p.kind !== 'brand'), [allProducts])
+  const orders = useMemo(() => allOrders.filter(o => o.kind !== 'brand'), [allOrders])
   const [tab, setTab] = useState('production')
   const [search, setSearch] = useState('')
   const [factoryFilter, setFactoryFilter] = useState('')

@@ -88,16 +88,20 @@ export function buildDuplicateOrderPayload(sourceOrder, newOrderName) {
     quantity: it.quantity || 0,
     price_usd: it.price_usd || null,
     price_usd_snapshot: it.price_usd_snapshot || null,
+    price_brl: it.price_brl ?? null,
     requirements: it.requirements || null,
     colors: (it.colors || []).map(c => ({
       code: c.code || '',
       qty: c.qty || 0,
       price_usd: c.price_usd != null ? c.price_usd : null,
+      ...(c.price_brl != null ? { price_brl: c.price_brl } : {}),
     })),
   }))
   
   return {
     factory: sourceOrder.factory,
+    kind: sourceOrder.kind || 'factory',
+    currency: sourceOrder.currency || 'USD',
     order_name: newOrderName || `${sourceOrder.order_name || sourceOrder.factory} (cópia)`,
     status: 'draft',  // sempre começa como rascunho
     notes: sourceOrder.notes || null,
@@ -258,6 +262,7 @@ function cleanOrderPayload(order) {
     'promised_lead_days','manufacturing_started_at','order_date',
     'reserves',  // v13.68 — caixinhas em BRL guardadas pra este pedido
     'settled_at','settled_note',  // v13.69 — quitação manual (pedidos pagos fora do sistema)
+    'kind','currency',  // v13.84 — pedido de marca parceira, cobrado em reais
   ]
   const out = {}
   for (const k of allowed) {

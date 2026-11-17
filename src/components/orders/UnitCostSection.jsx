@@ -41,6 +41,8 @@ export function UnitCostSection({ order, products = [], rate, onEditPrices = nul
   }
 
   const real = c.kind === 'real'
+  // v13.84 — pedido de marca parceira: tudo em reais (sem FOB nem dólar)
+  const brl1 = c.currency === 'BRL'
   // marcado como pago mas sem (todos os) pagamentos lançados: já saiu, só não dá pra fechar
   const paidOutside = !real && c.isManuallySettled
   const title = real || paidOutside ? 'Quanto saiu cada peça' : 'Quanto vai sair cada peça'
@@ -56,15 +58,19 @@ export function UnitCostSection({ order, products = [], rate, onEditPrices = nul
   const spread = !!c.cheapest && !!c.priciest && c.priciest.brlUnit - c.cheapest.brlUnit >= 0.01
 
   const copy = async () => {
-    const rows = [['Modelo', 'Cor', 'Peças', 'FOB por peça (US$)', 'Custo por peça (US$)', 'Custo por peça (R$)']]
+    const rows = [brl1
+      ? ['Modelo', 'Cor', 'Peças', 'Custo por peça (R$)']
+      : ['Modelo', 'Cor', 'Peças', 'FOB por peça (US$)', 'Custo por peça (US$)', 'Custo por peça (R$)']]
     for (const m of models) {
       for (const l of linesOf(m)) {
-        rows.push([
-          nameOf(m.itemId), l.colorCode || '', l.qty,
-          l.fobUnit > 0 ? formatFixedBR(l.fobUnit, 2) : '',
-          l.hasPrice ? formatFixedBR(l.usdUnit, 2) : '',
-          l.hasPrice ? formatFixedBR(l.brlUnit, 2) : '',
-        ])
+        rows.push(brl1
+          ? [nameOf(m.itemId), l.colorCode || '', l.qty, l.hasPrice ? formatFixedBR(l.brlUnit, 2) : '']
+          : [
+              nameOf(m.itemId), l.colorCode || '', l.qty,
+              l.fobUnit > 0 ? formatFixedBR(l.fobUnit, 2) : '',
+              l.hasPrice ? formatFixedBR(l.usdUnit, 2) : '',
+              l.hasPrice ? formatFixedBR(l.brlUnit, 2) : '',
+            ])
       }
     }
     try {
@@ -111,12 +117,12 @@ export function UnitCostSection({ order, products = [], rate, onEditPrices = nul
       <Notes c={c} onEditPrices={onEditPrices} />
 
       {/* O valor de CADA peça: modelo por modelo, cor por cor */}
-      <div className="uc-table" role="table">
+      <div className={`uc-table${brl1 ? ' brl' : ''}`} role="table">
         <div className="uc-row uc-row-head" role="row">
           <span>Peça</span>
           <span className="num">Quantas</span>
-          <span className="num">FOB</span>
-          <span className="num">Em dólar</span>
+          {!brl1 && <span className="num">FOB</span>}
+          {!brl1 && <span className="num">Em dólar</span>}
           <span className="num">{priceHead}</span>
         </div>
         {models.map(m => {
@@ -139,18 +145,18 @@ export function UnitCostSection({ order, products = [], rate, onEditPrices = nul
                 <span className="num">{int(m.qty)}</span>
                 {m.uniform ? (
                   <>
-                    <span className="num muted">{first?.fobUnit > 0 ? usd(first.fobUnit) : '—'}</span>
-                    <span className="num muted">{usd(m.usdUnit)}</span>
+                    {!brl1 && <span className="num muted">{first?.fobUnit > 0 ? usd(first.fobUnit) : '—'}</span>}
+                    {!brl1 && <span className="num muted">{usd(m.usdUnit)}</span>}
                     <span className="num uc-price">{brl(m.brlUnit)}</span>
                   </>
-                ) : <><span /><span /><span /></>}
+                ) : brl1 ? <span /> : <><span /><span /><span /></>}
               </div>
               {!m.uniform && linesOf(m).map((l, i) => (
                 <div key={i} className="uc-row uc-color" role="row">
                   <span className="uc-color-name">{l.colorCode || '—'}{!l.hasPrice && <small className="warn"> sem preço</small>}</span>
                   <span className="num">{int(l.qty)}</span>
-                  <span className="num muted">{l.fobUnit > 0 ? usd(l.fobUnit) : '—'}</span>
-                  <span className="num muted">{l.hasPrice ? usd(l.usdUnit) : '—'}</span>
+                  {!brl1 && <span className="num muted">{l.fobUnit > 0 ? usd(l.fobUnit) : '—'}</span>}
+                  {!brl1 && <span className="num muted">{l.hasPrice ? usd(l.usdUnit) : '—'}</span>}
                   <span className="num uc-price">{l.hasPrice ? brl(l.brlUnit) : '—'}</span>
                 </div>
               ))}
@@ -163,8 +169,11 @@ export function UnitCostSection({ order, products = [], rate, onEditPrices = nul
         <strong>Como foi calculado:</strong>{' '}
         {real
           ? <>tudo que foi pago em reais ({brl(c.paidBrl)}{c.paidRate ? `, câmbio médio de ${rateBR(c.paidRate)} em ${c.paymentsCount} pagamento${c.paymentsCount !== 1 ? 's' : ''}` : ''}) foi repartido entre as peças </>
-          : <>o que já foi pago ({brl(c.paidBrl)}) mais o que falta ({usd(c.pendingUsd)} a {rateBR(c.projRate)}) foi repartido entre as peças </>}
-        {c.weightBasis === 'trading' && 'na proporção do valor final que a trading passou pra cada modelo e cor.'}
+          : brl1
+            ? <>o que já foi pago ({brl(c.paidBrl)}) mais o que falta ({brl(c.pendingUsd)}) foi repartido entre as peças </>
+            : <>o que já foi pago ({brl(c.paidBrl)}) mais o que falta ({usd(c.pendingUsd)} a {rateBR(c.projRate)}) foi repartido entre as peças </>}
+        {brl1 && c.weightBasis !== 'pieces' && 'na proporção do preço combinado com a marca pra cada modelo e cor.'}
+        {!brl1 && c.weightBasis === 'trading' && 'na proporção do valor final que a trading passou pra cada modelo e cor.'}
         {c.weightBasis === 'fob' && 'na proporção do FOB de cada modelo e cor (a trading não detalhou o valor final por linha).'}
         {c.weightBasis === 'mixed' && 'na proporção do valor da trading — e, nas linhas sem valor da trading, do FOB × fator do pedido.'}
         {c.weightBasis === 'pieces' && 'em partes iguais, porque o pedido não tem preço por modelo.'}
@@ -178,20 +187,22 @@ export function UnitCostSection({ order, products = [], rate, onEditPrices = nul
 function Notes({ c, onEditPrices }) {
   const notes = []
   const real = c.kind === 'real'
+  const brl1 = c.currency === 'BRL'
+  const money = brl1 ? brl : usd
 
   if (c.missingPayments && c.kind === 'estimate') {
     notes.push({ sev: 'warn', text: <>O pedido está marcado como pago, mas <strong>não tem nenhum pagamento lançado</strong>. Os valores abaixo são só uma estimativa — lance os pagamentos (data, valor em reais e câmbio) pra ter o custo real de cada peça.</> })
   } else if (c.missingPayments) {
-    notes.push({ sev: 'warn', text: <>O pedido está marcado como pago, mas os pagamentos lançados cobrem só <strong>{pct(c.coverage)}</strong> do valor ({usd(c.paidUsd)} de {usd(c.expectedUsd)}). Parece faltar pagamento: o que falta entrou como previsão. Lance os que faltam pra fechar o custo real.</> })
+    notes.push({ sev: 'warn', text: <>O pedido está marcado como pago, mas os pagamentos lançados cobrem só <strong>{pct(c.coverage)}</strong> do valor ({money(c.paidUsd)} de {money(c.expectedUsd)}). Parece faltar pagamento: o que falta entrou como previsão. Lance os que faltam pra fechar o custo real.</> })
   }
   if (real && Math.abs(c.diffUsd) >= 0.01 && c.expectedUsd > 0) {
     const less = c.diffUsd < 0
     notes.push({
       sev: 'info',
-      text: <>Você pagou <strong>{usd(c.paidUsd)}</strong>; {c.weightBasis === 'trading' ? 'o valor da trading era' : 'a previsão era'} {usd(c.expectedUsd)} — {usd(Math.abs(c.diffUsd))} {less ? 'a menos' : 'a mais'}. Os valores abaixo usam o que foi <strong>realmente pago</strong>.</>,
+      text: <>Você pagou <strong>{money(c.paidUsd)}</strong>; {brl1 ? 'o combinado com a marca era' : c.weightBasis === 'trading' ? 'o valor da trading era' : 'a previsão era'} {money(c.expectedUsd)} — {money(Math.abs(c.diffUsd))} {less ? 'a menos' : 'a mais'}. Os valores abaixo usam o que foi <strong>realmente pago</strong>.</>,
     })
   }
-  if (real && c.weightBasis !== 'trading' && c.weightBasis !== 'pieces') {
+  if (real && !brl1 && c.weightBasis !== 'trading' && c.weightBasis !== 'pieces') {
     notes.push({
       sev: 'info',
       text: <>O valor de cada peça segue a proporção do FOB, porque {c.weightBasis === 'mixed' ? 'parte das linhas não tem' : 'o pedido não tem'} o valor final da trading por linha.
@@ -213,7 +224,9 @@ function Notes({ c, onEditPrices }) {
     notes.push({ sev: 'warn', text: <>{c.incompletePayments} pagamento{c.incompletePayments !== 1 ? 's estão' : ' está'} sem o valor em reais ou sem o câmbio e não {c.incompletePayments !== 1 ? 'entraram' : 'entrou'} na conta.</> })
   }
   if (c.kind === 'partial' && !c.missingPayments && c.pendingUsd > 0.01) {
-    notes.push({ sev: 'info', text: <>Já pago: {brl(c.paidBrl)} ({usd(c.paidUsd)}). Falta {usd(c.pendingUsd)}, projetado a {rateBR(c.projRate)} — os valores fecham quando o pedido for quitado.</> })
+    notes.push({ sev: 'info', text: brl1
+      ? <>Já pago: {brl(c.paidBrl)}. Falta {brl(c.pendingUsd)} — os valores fecham quando o pedido for quitado.</>
+      : <>Já pago: {brl(c.paidBrl)} ({usd(c.paidUsd)}). Falta {usd(c.pendingUsd)}, projetado a {rateBR(c.projRate)} — os valores fecham quando o pedido for quitado.</> })
   }
 
   if (notes.length === 0) return null

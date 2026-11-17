@@ -30,9 +30,24 @@ const STEPS = {
   },
 }
 
-export function NextStepBar({ order, onStatus, onSheet, onPrices, needsPrices = false, extra = null }) {
-  const step = STEPS[order?.status]
-  if (!step || !onStatus) return null
+const BRAND_STEPS = {
+  draft: {
+    where: 'Rascunho — ainda não foi pra marca.',
+    action: 'Enviei pra marca',
+    hint: 'Mande o pedido pra marca e marque aqui.',
+  },
+  sent: {
+    where: 'Em revisão — esperando a marca confirmar o orçamento.',
+    action: 'Marca confirmou — começou a produzir',
+  },
+  manufacturing: { where: 'A marca está produzindo.', action: 'A marca enviou — está a caminho' },
+}
+
+export function NextStepBar({ order, onStatus, onSheet, onPrices, needsPrices = false, extra = null, isBrand = false }) {
+  const base = STEPS[order?.status]
+  if (!base || !onStatus) return null
+  // v13.84 — pedido de marca parceira: mesma sequência, palavras da marca
+  const step = isBrand ? { ...base, ...(BRAND_STEPS[order.status] || {}) } : base
   return (
     <div className="nsb">
       <div className="nsb-text">
@@ -42,10 +57,10 @@ export function NextStepBar({ order, onStatus, onSheet, onPrices, needsPrices = 
       </div>
       <div className="nsb-actions">
         {order.status === 'draft' && onSheet && (
-          <button type="button" className="btn btn-outline btn-sm" onClick={onSheet}>📊 Planilha da fábrica</button>
+          <button type="button" className="btn btn-outline btn-sm" onClick={onSheet}>{isBrand ? '📊 Planilha do pedido' : '📊 Planilha da fábrica'}</button>
         )}
         {needsPrices && onPrices && (order.status === 'sent' || order.status === 'manufacturing') && (
-          <button type="button" className="btn btn-outline btn-sm" onClick={onPrices}>💵 Lançar valores da trading</button>
+          <button type="button" className="btn btn-outline btn-sm" onClick={onPrices}>{isBrand ? '💵 Lançar preços' : '💵 Lançar valores da trading'}</button>
         )}
         <button type="button" className="btn btn-primary btn-sm" onClick={() => onStatus(step.to)}>
           {step.action} →

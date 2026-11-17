@@ -45,6 +45,8 @@
 .pay-bank em { color: var(--text-muted); font-style: normal }
 .pay-actions { display: flex; gap: 6px; justify-content: flex-end }
 .pay-total { background: var(--hover); font-weight: 500 }
+/* v13.84 — pedido em reais (marca parceira): sem colunas de câmbio e dólar */
+.pay-table.brl .pay-row:not(.incomplete) { grid-template-columns: 26px 80px minmax(110px, 1.2fr) minmax(70px, 1fr) 52px 86px }
 .pay-row.incomplete { background: var(--warn-bg); grid-template-columns: 28px minmax(0, 1fr) auto }
 .pay-btn.sm { font-size: 12px; padding: 3px 9px; border-radius: 7px }
 .pay-btn.icon { padding: 3px 7px; font-size: 13px; line-height: 1 }
@@ -79,7 +81,7 @@
 
 @media (max-width: 760px) {
   .pay-head { display: none }
-  .pay-row { grid-template-columns: 34px 1fr 1fr; row-gap: 4px }
+  .pay-row, .pay-table.brl .pay-row:not(.incomplete) { grid-template-columns: 34px 1fr 1fr; row-gap: 4px }
   .pay-row > :nth-child(n+4) { grid-column: 2 / -1; text-align: left }
   .pay-row .num { text-align: left }
   .pay-actions { justify-content: flex-start }

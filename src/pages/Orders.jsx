@@ -39,6 +39,8 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
   const [loading, setLoading] = useState(initialData.length === 0)
   // v13.81 — abas: 'active' (padrão) | etapa | 'all' | 'trash'
   const [filter, setFilter] = useStickyFilter('orders.tab', 'active')
+  // v13.84 — pedidos de fábrica × de marca parceira (nunca na mesma lista)
+  const [side, setSide] = useStickyFilter('orders.side', 'factory')
   // v13.72 — ordem da lista. Preferência (não filtro): persiste entre sessões e
   // não é apagada pelo "limpar filtros".
   const [sortMode, setSortMode] = useState(() => {
@@ -306,7 +308,8 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
       //   - Produto COM outra fábrica e usado neste pedido → adiciona como supplier (secundária)
       // Isso resolve o "deadlock" de produtos em desenvolvimento que precisam virar produtos reais.
       const productsToUpdate = []
-      for (const it of (order.items || [])) {
+      // v13.84 — pedido de marca parceira não mexe no cadastro de fábrica dos produtos
+      for (const it of (order.kind === 'brand' ? [] : (order.items || []))) {
         if (!it.product_id) continue
         const prod = products.find(p => p.id === it.product_id)
         if (!prod) continue
@@ -328,6 +331,8 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         trackAction('create_order', { factory: order.factory, items_count: (order.items || []).length })
         // v13.60 — continuidade: depois do load(), abre o pedido recém-salvo
         setOpenAfterSave(created.id)
+        // v13.84 — pedido de marca aparece na lista das marcas
+        setSide(order.kind === 'brand' ? 'brand' : 'factory')
       } else {
         await updateOrder(order.id, order)
         writeLog({ userId: user.id, userName: user.name, action: 'editou pedido', target: order.order_name || order.factory, entityType: 'order', entityId: order.id })
@@ -908,6 +913,9 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
         sortMode={sortMode}
         tab={filter}
         onTab={setFilter}
+        side={side}
+        onSide={setSide}
+        showSides={factories.some(f => f.kind === 'brand')}
         actions={<>
           <select
             className="ob-select"
@@ -925,7 +933,7 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
           >
             Lixeira{trashLoaded ? ` (${trashOrders.length})` : ''}
           </button>
-          <button className="btn btn-primary" onClick={() => setCreator({})}>+ Novo pedido</button>
+          <button className="btn btn-primary" onClick={() => setCreator(side === 'brand' ? { supplierKind: 'brand' } : {})}>+ Novo pedido</button>
         </>}
         onOpen={(o) => setDetail(o)}
         onArrivalSave={perm.orders ? updateArrival : undefined}
@@ -937,6 +945,7 @@ export default function OrdersPage({ user, perm, rate, shopifyCache = null, init
       <OrderCreator
         order={creator.order || null}
         initialStep={creator.step || null}
+        initialSupplierKind={creator.supplierKind || null}
         prefill={creator.prefill || null}
         factories={factories}
         products={products}

@@ -13,6 +13,7 @@ import { ReceiptViewer } from './ReceiptViewer'
 import { formatMoneyBR, formatRateBR } from '../../lib/payments'
 import { addPayment, updatePayment, deletePayment, updateOrder } from '../../lib/data/orders'
 import { computeOrderBalance } from '../../lib/financial'
+import { isBrandOrder, orderMoney, formatMoney } from '../../lib/suppliers'
 import { TradingValuesModal } from './TradingValuesModal'
 import { ReservesSection } from './ReservesSection'
 import { UnitCostSection } from './UnitCostSection'
@@ -52,6 +53,11 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
   // v13.67 — a dívida é o VALOR FINAL da trading (FOB + impostos + frete),
   // não o FOB. `bal` traz total final, confirmado vs estimado, pago e falta.
   const bal = computeOrderBalance(o, rate)
+  // v13.84 — pedido de MARCA PARCEIRA: cobrado em reais, sem FOB nem trading
+  const isBrand = isBrandOrder(o)
+  const isBrl = bal.currency === 'BRL'
+  const money = orderMoney(bal)
+  const hasValue = money.total > 0
   const totalPaidUsd = bal.paidUsd
   const remainUsd = bal.remainingUsd
   const totalPaidBrl = bal.paidBrl
@@ -256,8 +262,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
               <button
                 className="btn btn-outline btn-sm"
                 onClick={() => (onEditPrices ? onEditPrices() : setTradingModal(true))}
-                title="Colocar ou corrigir o FOB e o valor final da trading de cada cor"
-              >💵 Preços e trading{!bal.isFullyConfirmed && bal.total > 0 ? ' ⚠' : ''}</button>
+                title={isBrl ? 'Colocar ou corrigir o preço em reais de cada cor' : 'Colocar ou corrigir o FOB e o valor final da trading de cada cor'}
+              >{isBrl ? '💵 Preços' : '💵 Preços e trading'}{!bal.isFullyConfirmed && hasValue ? ' ⚠' : ''}</button>
             )}
             {/* v13.47 Planilha da fábrica — contém FOB, só pra quem vê preços */}
             {perm.prices && (
@@ -266,7 +272,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 onClick={exportFactorySheet}
                 disabled={exportingSheet}
                 title="Gera o Excel com fotos no formato enviado à fábrica (modelos, cores, quantidades, FOB e seção COLORS)"
-              >{exportingSheet ? '⏳ Gerando...' : '📊 Planilha Fábrica'}</button>
+              >{exportingSheet ? '⏳ Gerando...' : (isBrand ? '📊 Planilha do pedido' : '📊 Planilha Fábrica')}</button>
             )}
             {perm.orders && !readOnly ? <button className="btn btn-primary btn-sm" onClick={onEdit}>✏️ Editar</button> : null}
             {/* v13.80 — o que é de vez em quando fica no "Mais" (o topo tinha 6 botões) */}
@@ -293,7 +299,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
               onStatus={onStatus}
               onSheet={perm.prices ? exportFactorySheet : null}
               onPrices={perm.prices && onEditPrices ? onEditPrices : null}
-              needsPrices={bal.total > 0 && !bal.isFullyConfirmed}
+              needsPrices={(hasValue || bal.unpricedQty > 0) && !bal.isFullyConfirmed}
+              isBrand={isBrand}
               extra={nextStepExtra}
             />
           )}
@@ -373,7 +380,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
 
           <div className="order-table-wrap">
             <table className="order-table">
-              <thead><tr><th>PRODUTO</th><th>COR</th><th>QTD</th>{isM && perm.prices && <th>USD</th>}</tr></thead>
+              <thead><tr><th>PRODUTO</th><th>COR</th><th>QTD</th>{isM && perm.prices && <th>{isBrl ? 'R$ / PEÇA' : 'USD'}</th>}</tr></thead>
               <tbody>
                 {(o.items || []).map(it => {
                   const prod = products.find(p => p.id === it.product_id)
@@ -383,7 +390,10 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                   if (cls.length > 0) {
                     return cls.map((cl, ci) => {
                       // Preço efetivo: cor tem próprio? usa ele. Senão herda do item.
-                      const colorPrice = cl.price_usd != null && cl.price_usd !== '' ? parseFloat(cl.price_usd) : null
+                      // v13.84 — pedido de marca: preço em reais (price_brl)
+                      const priceKey = isBrl ? 'price_brl' : 'price_usd'
+                      const itemPrice = parseFloat((isBrl ? it.price_brl : it.price_usd) || 0)
+                      const colorPrice = cl[priceKey] != null && cl[priceKey] !== '' ? parseFloat(cl[priceKey]) : null
                       const effective = colorPrice != null ? colorPrice : itemPrice
                       const hasCustom = colorPrice != null && colorPrice !== itemPrice
                       return (
@@ -396,8 +406,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                           </td>
                           <td style={{ textAlign: 'center' }}>{cl.qty || 0}</td>
                           {isM && perm.prices && (
-                            <td title={hasCustom ? `Preço próprio desta cor (item é US$ ${formatMoneyBR(itemPrice)})` : undefined}>
-                              {effective > 0 ? 'US$ ' + formatMoneyBR(effective) : '—'}
+                            <td title={hasCustom ? `Preço próprio desta cor (item é ${formatMoney(itemPrice, money.currency)})` : undefined}>
+                              {effective > 0 ? formatMoney(effective, money.currency) : '—'}
                               {hasCustom && <span style={{ color: '#F59E0B', marginLeft: 3, fontWeight: 700 }} title="Preço customizado">*</span>}
                             </td>
                           )}
@@ -410,7 +420,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                       <td><strong>{name}</strong></td>
                       <td>—</td>
                       <td style={{ textAlign: 'center' }}>{it.quantity || 0}</td>
-                      {isM && perm.prices && <td>{itemPrice > 0 ? 'US$ ' + formatMoneyBR(itemPrice) : '—'}</td>}
+                      {isM && perm.prices && <td>{(isBrl ? Number(it.price_brl) : itemPrice) > 0 ? formatMoney(isBrl ? Number(it.price_brl) : itemPrice, money.currency) : '—'}</td>}
                     </tr>
                   )
                 })}
@@ -420,7 +430,8 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16, padding: '8px 14px', background: 'var(--bg)', borderRadius: 6, marginTop: 4 }}>
             <strong style={{ color: 'var(--primary)' }}>Total: {totalQty} peças</strong>
-            {isM && perm.prices && budgetTotal > 0 && <strong style={{ color: '#F59E0B' }}>FOB: US$ {formatMoneyBR(budgetTotal)}</strong>}
+            {isM && perm.prices && !isBrl && budgetTotal > 0 && <strong style={{ color: '#F59E0B' }}>FOB: US$ {formatMoneyBR(budgetTotal)}</strong>}
+            {isM && perm.prices && isBrl && money.total > 0 && <strong>Total: {formatMoney(money.total, 'BRL')}</strong>}
           </div>
 
           {o.notes && <div style={{ padding: 10, background: '#f9fafb', borderRadius: 6, fontSize: 13, marginTop: 8 }}>{o.notes}</div>}
@@ -432,7 +443,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 <div className="card-title" style={{ margin: 0 }}>Pagamentos</div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {/* v13.69 — quitar pedidos antigos pagos fora do sistema */}
-                  {bal.total > 0 && (
+                  {hasValue && (
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={toggleSettled}
@@ -450,7 +461,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                   ✓ <strong>Pago integralmente</strong> — marcado em {formatDate(bal.settledAt, 'full')}.
                   {(o.payments || []).length === 0
                     ? ' Os pagamentos foram feitos fora do sistema.'
-                    : ` Registrados aqui: US$ ${formatMoneyBR(totalPaidUsd)} de US$ ${formatMoneyBR(bal.total)}.`}
+                    : ` Registrados aqui: ${formatMoney(money.paid, money.currency)} de ${formatMoney(money.total, money.currency)}.`}
                   <span className="text-muted" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
                     Este pedido não entra mais no saldo em aberto do financeiro.
                   </span>
@@ -458,6 +469,7 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
               )}
               <PaymentsSection
                 payments={o.payments || []}
+                currency={money.currency}
                 adding={addingPay}
                 onStartAdd={() => setAddingPay(true)}
                 onCancelAdd={() => setAddingPay(false)}
@@ -473,8 +485,38 @@ export function OrderDetail({ order: o, products, colors = [], perm, rate, user,
                 })}
               />
 
+              {/* v13.84 — pedido de marca: tudo em reais, sem FOB/trading/câmbio */}
+              {isBrl && (hasValue || bal.unpricedQty > 0) && (
+                <div style={{ marginTop: 12 }}>
+                  <div className="brl-summary">
+                    <div>
+                      <span>Total do pedido</span>
+                      <strong>{formatMoney(money.total, 'BRL')}</strong>
+                      <em>{bal.isFullyConfirmed ? 'todos os preços lançados' : `${bal.unpricedQty} peça${bal.unpricedQty !== 1 ? 's' : ''} sem preço`}</em>
+                    </div>
+                    <div>
+                      <span>Pago</span>
+                      <strong>{formatMoney(money.paid, 'BRL')}</strong>
+                      <em>{Math.round(bal.percentPaid)}% do pedido</em>
+                    </div>
+                    <div className={bal.isSettled ? 'good' : 'bad'}>
+                      <span>{bal.isSettled ? 'Quitado' : 'Falta pagar'}</span>
+                      <strong>{formatMoney(Math.max(0, money.remaining), 'BRL')}</strong>
+                    </div>
+                  </div>
+                  {!bal.isFullyConfirmed && (
+                    <div style={{ marginTop: 8, padding: '7px 10px', background: 'var(--warn-bg)', borderRadius: 6, fontSize: 12, color: 'var(--warn-ink)' }}>
+                      Falta o preço de {bal.unpricedQty} peça{bal.unpricedQty !== 1 ? 's' : ''} — o total ainda não está completo. Lance em <strong>💵 Preços</strong>.
+                    </div>
+                  )}
+                  {!readOnly && (
+                    <ReservesSection reserves={o.reserves || []} balance={bal} onSave={saveReserves} />
+                  )}
+                </div>
+              )}
+
               {/* v13.67 — painel medido contra o VALOR FINAL da trading */}
-              {bal.total > 0 && (
+              {!isBrl && bal.total > 0 && (
                 <div style={{ marginTop: 12 }}>
                   {/* Barra de quitação */}
                   <div style={{ marginBottom: 10 }}>

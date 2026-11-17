@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { groupOrdersByStage, buildAttention, sortOrders, ORDER_STAGES } from '../../lib/orderSort'
 import { computeOrderBalance } from '../../lib/financial'
 import { computeUnitCosts } from '../../lib/unitCost'
+import { orderMoney, formatMoney } from '../../lib/suppliers'
 import { formatFixedBR } from '../../lib/moneyMask'
 import { computeOrderDelay } from '../../lib/pendencias'
 import { formatDate, parseDateLocal } from '../../lib/utils'
@@ -34,6 +35,13 @@ export const ORDER_TABS = [
   ...ORDER_STAGES.map(s => ({ id: s.id, label: s.label, match: (o) => (o.status === 'cancelled' ? 'completed' : o.status) === s.id })),
   { id: 'all', label: 'Todos', match: () => true },
 ]
+// v13.84 — na aba das marcas, as dicas falam da marca (não da fábrica)
+const BRAND_HINTS = {
+  draft: 'ainda não foi pra marca',
+  sent: 'esperando a marca confirmar o orçamento',
+  manufacturing: 'a marca está produzindo',
+  in_transit: 'a caminho',
+}
 const DAY = 86400000
 const usd = (n) => 'US$ ' + Math.round(n || 0).toLocaleString('pt-BR')
 const brl = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR')
@@ -62,6 +70,8 @@ export function OrdersBoard({
   orders = [], products = [], colors = [], perm = {}, rate, leadTimeByFactory = new Map(),
   sortMode = 'smart', tab = 'active', onTab, actions = null,
   onOpen, onArrivalSave, onMarkArrived,
+  // v13.84 — fábricas × marcas parceiras: nunca na mesma lista
+  side = 'factory', onSide, showSides = false,
 }) {
   const ctx = { rate, leadTimeByFactory }
   const showPrices = !!perm.prices
@@ -84,7 +94,11 @@ export function OrdersBoard({
   }, [])
   const haystack = useMemo(() => new Map(orders.map(o => [o.id, searchText(o, productsById, colorName)])), [orders, productsById, colorName])
   const terms = norm(query).split(/\s+/).filter(Boolean)
-  const searched = terms.length === 0 ? orders : orders.filter(o => terms.every(t => haystack.get(o.id)?.includes(t)))
+  const sideOf = (o) => (o.kind === 'brand' ? 'brand' : 'factory')
+  const sideCounts = { factory: 0, brand: 0 }
+  for (const o of orders) if (o.status !== 'completed' && o.status !== 'cancelled') sideCounts[sideOf(o)]++
+  const sideOrders = orders.filter(o => sideOf(o) === side)
+  const searched = terms.length === 0 ? sideOrders : sideOrders.filter(o => terms.every(t => haystack.get(o.id)?.includes(t)))
 
   // ── Abas
   const activeTab = ORDER_TABS.find(t => t.id === tab) || ORDER_TABS[0]
@@ -111,19 +125,21 @@ export function OrdersBoard({
 
   // ── Resumo da aba
   const summary = (() => {
-    let pieces = 0, remUsd = 0, remBrl = 0, nextArrival = null
+    let pieces = 0, remUsd = 0, remBrl = 0, nextArrival = null, brlOnly = 0
     for (const o of tabOrders) {
       pieces += piecesOf(o)
       if (o.status !== 'draft') {
         const b = computeOrderBalance(o, rate)
-        if (!b.isSettled && b.remainingUsd > 0) { remUsd += b.remainingUsd; remBrl += b.remainingBrl || 0 }
+        // pedido em reais (marca): o valor exato é o em reais
+        if (b.isBrl) { if (!b.isSettled && b.remainingBrl > 0) { brlOnly += b.remainingBrl; remBrl += b.remainingBrl } }
+        else if (!b.isSettled && b.remainingUsd > 0) { remUsd += b.remainingUsd; remBrl += b.remainingBrl || 0 }
       }
       if (o.status === 'in_transit') {
         const t = parseDateLocal(o.expected_arrival)?.getTime()
         if (t != null && (!nextArrival || t < nextArrival.t)) nextArrival = { t, o }
       }
     }
-    return { pieces, remUsd, remBrl, nextArrival }
+    return { pieces, remUsd, remBrl, brlOnly, nextArrival }
   })()
 
   const rowProps = { productsById, showPrices, leadTimeByFactory, flagged, rate, onOpen, onArrivalSave, onMarkArrived }
@@ -131,6 +147,23 @@ export function OrdersBoard({
 
   return (
     <div className="ob">
+      {/* v13.84 — Fábricas × Marcas parceiras (nunca misturados) */}
+      {(showSides || sideCounts.brand > 0 || side === 'brand') && (
+        <div className="ob-sides" role="tablist" aria-label="Fábricas ou marcas parceiras">
+          {[
+            { id: 'factory', label: 'Fábricas', hint: 'Fabricação própria — Evany Hair' },
+            { id: 'brand', label: 'Marcas parceiras', hint: 'Modelos prontos de outras marcas (ex.: Slick)' },
+          ].map(sd => (
+            <button key={sd.id} type="button" role="tab" aria-selected={side === sd.id}
+              className={`ob-side${side === sd.id ? ' on' : ''}`} title={sd.hint}
+              onClick={() => onSide && onSide(sd.id)}>
+              {sd.label}
+              {sideCounts[sd.id] > 0 && <span className="ob-side-n" title="em andamento">{sideCounts[sd.id]}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Abas */}
       <nav className="ob-tabs" role="tablist" aria-label="Etapas do pedido">
         {ORDER_TABS.map(t => {
@@ -178,7 +211,10 @@ export function OrdersBoard({
         <div className="ob-summary">
           <span><strong>{plural(tabOrders.length, 'pedido', 'pedidos')}</strong> · {plural(summary.pieces, 'peça', 'peças')}</span>
           {showPrices && summary.remUsd > 0.5 && (
-            <span>Falta pagar <strong>{usd(summary.remUsd)}</strong>{summary.remBrl > 0 && <em> ≈ {brl(summary.remBrl)}</em>}</span>
+            <span>Falta pagar <strong>{usd(summary.remUsd)}</strong>{summary.remBrl - summary.brlOnly > 0 && <em> ≈ {brl(summary.remBrl - summary.brlOnly)}</em>}</span>
+          )}
+          {showPrices && summary.brlOnly > 0.5 && (
+            <span>Falta pagar <strong>{brl(summary.brlOnly)}</strong></span>
           )}
           {summary.nextArrival && (() => {
             const d = Math.round((summary.nextArrival.t - today()) / DAY)
@@ -245,7 +281,9 @@ export function OrdersBoard({
               )}
               {' '}<button type="button" className="ob-link" onClick={() => setQuery('')}>Limpar busca</button>
             </>
-          ) : `Nenhum pedido em “${activeTab.label}”.`}
+          ) : side === 'brand' && sideOrders.length === 0
+            ? 'Nenhum pedido de marca parceira ainda. Use "+ Novo pedido" e escolha a marca.'
+            : `Nenhum pedido em “${activeTab.label}”.`}
         </div>
       ) : (
         <div className={`ob-table${showPrices ? '' : ' no-pay'}`} role="table">
@@ -276,10 +314,16 @@ export function OrdersBoard({
                       <i className="ob-dot" />
                       <strong>{st.label}</strong>
                       <span className="ob-group-n">{st.orders.length}</span>
-                      <span className="ob-group-hint">{st.hint}</span>
+                      <span className="ob-group-hint">{side === 'brand' ? (BRAND_HINTS[st.id] || st.hint) : st.hint}</span>
                       <span className="ob-group-meta">
                         {plural(st.pieces, 'peça', 'peças')}
-                        {showPrices && st.id !== 'draft' && st.remainingUsd > 0.5 && <> · falta {usd(st.remainingUsd)}</>}
+                        {showPrices && st.id !== 'draft' && (() => {
+                          if (side === 'brand') {
+                            const r = st.orders.reduce((a, o) => { const b = computeOrderBalance(o, rate); return a + (b.isSettled ? 0 : Math.max(0, b.remainingBrl || 0)) }, 0)
+                            return r > 0.5 ? <> · falta {brl(r)}</> : null
+                          }
+                          return st.remainingUsd > 0.5 ? <> · falta {usd(st.remainingUsd)}</> : null
+                        })()}
                         {collapsible && <span className="ob-group-toggle">{open ? 'Recolher' : 'Mostrar'}</span>}
                       </span>
                     </div>
@@ -438,18 +482,20 @@ function Payment({ order: o, rate }) {
       </>
     )
   }
-  if (!(b.total > 0)) return <span className="ob-muted">Sem preço ainda</span>
+  const m = orderMoney(b)
+  if (!(m.total > 0)) return <span className="ob-muted">Sem preço ainda</span>
   const pct = Math.max(0, Math.min(100, Math.round(b.percentPaid)))
+  const fmt = (n) => formatMoney(Math.round(n || 0), m.currency, 0)
   return (
     <>
       <span className="ob-text">
-        <strong>falta {usd(b.remainingUsd)}</strong>
-        {b.remainingBrl > 0 && <span className="ob-muted"> ≈ {brl(b.remainingBrl)}</span>}
+        <strong>falta {fmt(m.remaining)}</strong>
+        {!b.isBrl && b.remainingBrl > 0 && <span className="ob-muted"> ≈ {brl(b.remainingBrl)}</span>}
       </span>
       {pct > 0 && <div className="ob-meter pay" title={`${pct}% pago`}><i style={{ width: `${pct}%` }} /></div>}
       <span className="ob-muted">
-        {pct > 0 ? `${pct}% pago de ${usd(b.total)}` : `nada pago de ${usd(b.total)}`}
-        {!b.isFullyConfirmed && <span className="ob-tag" title="Total calculado pelo FOB × fator — a trading ainda não lançou os valores finais">estimado</span>}
+        {pct > 0 ? `${pct}% pago de ${fmt(m.total)}` : `nada pago de ${fmt(m.total)}`}
+        {!b.isBrl && !b.isFullyConfirmed && <span className="ob-tag" title="Total calculado pelo FOB × fator — a trading ainda não lançou os valores finais">estimado</span>}
       </span>
       {b.unpricedQty > 0 && <span className="ob-tag warn">{plural(b.unpricedQty, 'peça', 'peças')} sem preço</span>}
     </>

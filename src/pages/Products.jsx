@@ -44,6 +44,8 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
   const [fSt, setFSt] = useStickyFilter('products.status', 'all')
   const [fFin, setFFin] = useStickyFilter('products.finish', 'all')
   const [fFac, setFFac] = useStickyFilter('products.factory', 'all')
+  // v13.84 — produtos de MARCA PARCEIRA (ex.: Slick) ficam separados dos de fabricação própria
+  const [side, setSide] = useStickyFilter('products.side', 'own')
   const [modal, setModal] = useState(null)
   const [detail, setDetail] = useState(null)
   const confirm = useConfirm()
@@ -111,6 +113,7 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
       return ha - hb
     })
     return sorted.filter(p => {
+      if ((p.kind === 'brand' ? 'brand' : 'own') !== side) return false
       const ms = fSt === 'all' || p.status === fSt
       const mf = fFin === 'all' || p.finish_type === fFin
       const mfa = fFac === 'all' || p.factory === fFac || (p.suppliers || []).some(s => s.factory === fFac)
@@ -135,13 +138,20 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
       }
       return ms && mf && mfa && mq
     })
-  }, [products, search, fSt, fFin, fFac])
+  }, [products, search, fSt, fFin, fFac, side])
+  const sideCounts = useMemo(() => {
+    const brand = products.filter(p => p.kind === 'brand').length
+    return { own: products.length - brand, brand }
+  }, [products])
 
   const hasFilters = fSt !== 'all' || fFin !== 'all' || fFac !== 'all' || search
   const clearFilters = () => { setFSt('all'); setFFin('all'); setFFac('all'); setSearch('') }
 
   const usedFin = useMemo(() => [...new Set(products.map(p => p.finish_type).filter(Boolean))], [products])
-  const allFactoryNames = useMemo(() => [...new Set([...products.map(p => p.factory), ...products.flatMap(p => (p.suppliers || []).map(s => s.factory))].filter(Boolean))], [products])
+  const allFactoryNames = useMemo(() => {
+    const mine = products.filter(p => (p.kind === 'brand' ? 'brand' : 'own') === side)
+    return [...new Set([...mine.map(p => p.factory), ...mine.flatMap(p => (p.suppliers || []).map(s => s.factory))].filter(Boolean))]
+  }, [products, side])
 
   // SKU → sales/stock indexado (otimização O(n²) → O(n))
   const salesByIndex = useMemo(() => {
@@ -495,7 +505,20 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
       <div className="search-box"><span>🔍</span>
         <input placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
       </div>
-      {perm.products ? <button className="btn btn-primary" onClick={() => setModal('new')}>+ Novo Produto</button> : null}
+      {perm.products ? (
+        <button className="btn btn-primary" onClick={() => setModal(side === 'brand' ? { kind: 'brand', status: 'catalog' } : 'new')}>
+          {side === 'brand' ? '+ Produto de marca' : '+ Novo Produto'}
+        </button>
+      ) : null}
+    </div>
+    <div className="chip-bar" role="tablist" aria-label="Tipo de produto">
+      <button role="tab" aria-selected={side === 'own'} className={`chip-filter${side === 'own' ? ' on' : ''}`} onClick={() => { setSide('own'); setFFac('all') }}>
+        Meus produtos <span className="text-muted">({sideCounts.own})</span>
+      </button>
+      <button role="tab" aria-selected={side === 'brand'} className={`chip-filter${side === 'brand' ? ' on' : ''}`} onClick={() => { setSide('brand'); setFFac('all') }}
+        title="Modelos prontos de marcas parceiras (ex.: Slick) — não se misturam com a fabricação própria">
+        Marcas parceiras <span className="text-muted">({sideCounts.brand})</span>
+      </button>
     </div>
     <div className="chip-bar">
       <button className={`chip-filter${fSt === 'all' ? ' on' : ''}`} onClick={() => setFSt('all')}>Todos</button>
@@ -509,14 +532,22 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
       </select>
       {perm.factoryInfo && (
         <select className="select-chip" value={fFac} onChange={e => setFFac(e.target.value)}>
-          <option value="all">Fábrica</option>
+          <option value="all">{side === 'brand' ? 'Marca' : 'Fábrica'}</option>
           {allFactoryNames.map(f => <option key={f} value={f}>{f}</option>)}
         </select>
       )}
       {hasFilters && <ClearFiltersButton visible={true} onClear={() => { clearFilters(); clearStickyFilters('products') }} />}
     </div>
 
-    {filtered.length === 0 ? <div className="empty-state"><div className="empty-icon">👑</div><p>Nenhum produto</p></div>
+    {filtered.length === 0 ? (
+      <div className="empty-state">
+        <div className="empty-icon">{side === 'brand' ? '🏷️' : '👑'}</div>
+        <p>{side === 'brand' ? 'Nenhum produto de marca parceira ainda' : 'Nenhum produto'}</p>
+        {side === 'brand' && !hasFilters && (
+          <p className="text-muted text-sm">Cadastre a marca em Fábricas → "+ Nova marca parceira" e depois os modelos dela aqui.</p>
+        )}
+      </div>
+    )
     : <div className="product-grid">{filtered.map(p => {
       const st = PROD_ST.find(s => s.id === p.status)
       const img = p.card_image_url || (p.photos || [])[0]
@@ -543,7 +574,7 @@ export default function ProductsPage({ user, perm, shopifyCache, initialData = [
             <div className="pcard-name">{UC(p.name)}</div>
             {/* Subtítulo: só fábrica (se permissão). Coleção vira tag pequena abaixo. */}
             {perm.factoryInfo && p.factory && (
-              <div className="text-muted text-sm">🏭 {p.factory}</div>
+              <div className="text-muted text-sm">{p.kind === 'brand' ? '🏷️' : '🏭'} {p.factory}</div>
             )}
             <div className="tag-row">
               {p.collection && <span className="tag" style={{ fontSize: 9, opacity: 0.7 }}>{p.collection}</span>}
@@ -603,7 +634,9 @@ function ProductModal({ product, collections, factories, colors, names, existing
       ...base,
       // Defaults garantem que campos null do banco virem string vazia
       name: base.name || '',
-      status: base.status || 'developing',
+      // v13.84 — 'own' (fabricação própria) | 'brand' (modelo de marca parceira)
+      kind: base.kind === 'brand' ? 'brand' : 'own',
+      status: base.status || (base.kind === 'brand' ? 'catalog' : 'developing'),
       collection: base.collection || '',
       factory: base.factory || '',
       factory_code: base.factory_code || '',
@@ -628,6 +661,7 @@ function ProductModal({ product, collections, factories, colors, names, existing
   const [dirty, setDirty] = useState(false)
   const [uploading, setUploading] = useState(false)
   const isEdit = !!product?.id
+  const isBrand = f.kind === 'brand'
   const toast = useToast()
   const cardInputRef = useRef()
   const galleryInputRef = useRef()
@@ -853,6 +887,16 @@ function ProductModal({ product, collections, factories, colors, names, existing
               />
             </div>
             <div className="form-group">
+              <label className="field-label">Tipo</label>
+              <div className="chip-bar" style={{ margin: 0 }}>
+                <button type="button" className={`chip-filter${!isBrand ? ' on' : ''}`}
+                  onClick={() => { if (isBrand) { s('kind', 'own'); s('factory', '') } }}>Fabricação própria</button>
+                <button type="button" className={`chip-filter${isBrand ? ' on' : ''}`}
+                  onClick={() => { if (!isBrand) { s('kind', 'brand'); s('factory', '') } }}>Modelo de marca parceira</button>
+              </div>
+              {isBrand && <div className="text-muted text-xs" style={{ marginTop: 4 }}>Modelo pronto da marca (não exclusivo). Fica separado dos seus produtos; o preço entra em cada pedido.</div>}
+            </div>
+            <div className="form-group">
               <label className="field-label">Status</label>
               <select className="field" value={f.status} onChange={e => s('status', e.target.value)}>
                 {PROD_ST.map(x => <option key={x.id} value={x.id}>{x.icon} {x.label}</option>)}
@@ -993,11 +1037,16 @@ function ProductModal({ product, collections, factories, colors, names, existing
           </div>
           {perm.factoryInfo && (
             <div className="form-group">
-              <label className="field-label">Fábrica</label>
+              <label className="field-label">{isBrand ? 'Marca' : 'Fábrica'}</label>
               <select className="field" value={f.factory || ''} onChange={e => s('factory', e.target.value)}>
                 <option value="">—</option>
-                {factories.map(fa => <option key={fa.id} value={fa.name}>{fa.name}</option>)}
+                {factories
+                  .filter(fa => (fa.kind === 'brand') === isBrand || fa.name === f.factory)
+                  .map(fa => <option key={fa.id} value={fa.name}>{fa.name}</option>)}
               </select>
+              {isBrand && factories.filter(fa => fa.kind === 'brand').length === 0 && (
+                <div className="text-muted text-xs" style={{ marginTop: 4 }}>Nenhuma marca cadastrada — crie em Fábricas → "+ Nova marca parceira".</div>
+              )}
             </div>
           )}
         </div>
@@ -1105,10 +1154,11 @@ function ProductModal({ product, collections, factories, colors, names, existing
         {perm.factoryInfo && (
           <div className="form-row">
             <div className="form-group">
-              <label className="field-label">Código Fábrica</label>
+              <label className="field-label">{isBrand ? 'Código na marca' : 'Código Fábrica'}</label>
               <input className="field" value={f.factory_code || ''} onChange={e => s('factory_code', e.target.value)} />
             </div>
-            {perm.prices && (
+            {/* marca: o preço muda a cada pedido (orçamento em reais) — não fica no cadastro */}
+            {perm.prices && !isBrand && (
               <div className="form-group">
                 <label className="field-label">Preço USD</label>
                 <MoneyInput prefix="US$" value={f.price_usd || ''} onChange={v => s('price_usd', v ?? '')} ariaLabel="Preço USD" />
@@ -1118,7 +1168,7 @@ function ProductModal({ product, collections, factories, colors, names, existing
         )}
 
         {/* === MÚLTIPLAS FÁBRICAS (só admin) === */}
-        {perm.factoryInfo && perm.prices && (
+        {perm.factoryInfo && perm.prices && !isBrand && (
           <div className="form-group">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <label className="field-label" style={{ margin: 0 }}>Múltiplas Fábricas ({(f.suppliers || []).length})</label>
@@ -1128,7 +1178,7 @@ function ProductModal({ product, collections, factories, colors, names, existing
               <div key={sp.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 6, marginBottom: 6 }}>
                 <select className="field field-sm" value={sp.factory} onChange={e => updSupp(sp.id, 'factory', e.target.value)}>
                   <option value="">Fábrica</option>
-                  {factories.map(fa => <option key={fa.id} value={fa.name}>{fa.name}</option>)}
+                  {factories.filter(fa => fa.kind !== 'brand').map(fa => <option key={fa.id} value={fa.name}>{fa.name}</option>)}
                 </select>
                 <input className="field field-sm" placeholder="Código" value={sp.factory_code || ''} onChange={e => updSupp(sp.id, 'factory_code', e.target.value)} />
                 <MoneyInput className="field field-sm" placeholder="USD" value={sp.price_usd || ''} onChange={v => updSupp(sp.id, 'price_usd', v ?? '')} ariaLabel="Preço USD do fornecedor" />

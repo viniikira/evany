@@ -40,7 +40,7 @@ export function classifyOrder(order, { rate, leadTimeByFactory = new Map(), now 
   const status = order?.status
   const delay = computeOrderDelay(order, leadTimeByFactory, now)
   const bal = computeOrderBalance(order, rate)
-  const openDebt = !bal.isSettled && bal.remainingUsd > 0.01
+  const openDebt = !bal.isSettled && (bal.isBrl ? bal.remainingBrl > 0.01 : bal.remainingUsd > 0.01)
 
   const arrivalMs = parseDateLocal(order?.expected_arrival)?.getTime() ?? null
   const arrivalLate = arrivalMs != null && arrivalMs < now && !CLOSED.has(status)
@@ -233,8 +233,13 @@ export function buildAttention(orders, ctx = {}) {
       if (waited >= 30) push('review_stale', 'medium', `Em revisão há ${waited} dias — a fábrica respondeu?`, ['open'], waited)
     }
 
-    if (o.status === 'completed' && !bal.isSettled && bal.remainingUsd > 0.01 && bal.total > 0) {
-      push('debt', 'high', `Já chegou, mas ainda faltam US$ ${Math.round(bal.remainingUsd).toLocaleString('pt-BR')} para pagar.`, ['open'])
+    const owes = bal.isBrl ? bal.remainingBrl > 0.01 && bal.totalBrl > 0 : bal.remainingUsd > 0.01 && bal.total > 0
+    if (o.status === 'completed' && !bal.isSettled && owes) {
+      // v13.84 — pedido de marca é cobrado em reais
+      const owed = bal.isBrl
+        ? `R$ ${Math.round(bal.remainingBrl).toLocaleString('pt-BR')}`
+        : `US$ ${Math.round(bal.remainingUsd).toLocaleString('pt-BR')}`
+      push('debt', 'high', `Já chegou, mas ainda faltam ${owed} para pagar.`, ['open'])
     }
 
     if (o.status !== 'draft' && !bal.isManuallySettled && bal.unpricedQty > 0) {

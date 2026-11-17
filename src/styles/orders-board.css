@@ -13,6 +13,19 @@
   background: var(--stage, var(--st-draft)); flex-shrink: 0;
 }
 
+/* ── v13.84 — Fábricas × Marcas parceiras ── */
+.ob-sides {
+  display: inline-flex; align-self: flex-start; gap: 2px; padding: 3px;
+  background: var(--line); border-radius: 10px;
+}
+.ob-side {
+  display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 13px; font-weight: 500;
+  color: var(--text-2); background: transparent; border: 0; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+}
+.ob-side:hover { color: var(--text) }
+.ob-side.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08) }
+.ob-side-n { font-size: 11px; font-weight: 600; color: var(--text-2); background: var(--hover); border-radius: 999px; padding: 0 7px; line-height: 18px }
+
 /* ── Abas ── */
 .ob-tabs {
   display: flex; gap: 2px; border-bottom: 1px solid var(--border);

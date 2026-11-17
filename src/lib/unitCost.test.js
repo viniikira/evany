@@ -173,6 +173,41 @@ describe('computeUnitCosts — pedido em aberto', () => {
   })
 })
 
+describe('computeUnitCosts — pedido de marca parceira (em reais)', () => {
+  const brand = {
+    kind: 'brand', currency: 'BRL',
+    items: [
+      { id: 'a', product_id: 'pa', price_brl: 300, colors: [{ code: '1B', qty: 10 }, { code: '613', qty: 5, price_brl: 360 }] },
+      { id: 'b', product_id: 'pb', colors: [{ code: '2', qty: 5, price_brl: 200 }] },
+    ],
+    // previsto: 3000 + 1800 + 1000 = 5800
+    payments: [{ amount_brl: 3000, payment_date: '2026-10-01' }, { amount_brl: 2800, payment_date: '2026-11-01' }],
+  }
+  it('quitado: custo de cada peça é o preço combinado, sem dólar', () => {
+    const r = computeUnitCosts(brand, 5.5)
+    expect(r.currency).toBe('BRL')
+    expect(r.kind).toBe('real')
+    expect(r.totalBrl).toBe(5800)
+    expect(r.lines.find(l => l.colorCode === '1B').brlUnit).toBeCloseTo(300, 6)
+    expect(r.lines.find(l => l.colorCode === '613').brlUnit).toBeCloseTo(360, 6)
+    expect(r.lines.find(l => l.colorCode === '2').brlUnit).toBeCloseTo(200, 6)
+    expect(r.paidRate).toBe(null)
+    expect(r.realMultiplier).toBe(null)
+  })
+  it('pagou a mais (frete da marca): entra no custo de cada peça', () => {
+    const r = computeUnitCosts({ ...brand, payments: [{ amount_brl: 6380 }] }, 5.5)   // +10%
+    expect(r.kind).toBe('real')
+    expect(r.lines.find(l => l.colorCode === '1B').brlUnit).toBeCloseTo(330, 6)
+    expect(cents(sum(r.lines, l => l.brlTotal))).toBe(638000)
+  })
+  it('em aberto: o que falta entra pelo valor em reais, sem cotação', () => {
+    const r = computeUnitCosts({ ...brand, payments: [{ amount_brl: 1000 }] }, 5.5)
+    expect(r.kind).toBe('partial')
+    expect(r.pendingUsd).toBe(4800)   // em reais, câmbio 1
+    expect(r.totalBrl).toBe(5800)
+  })
+})
+
 describe('computeUnitCosts — preços faltando', () => {
   it('pedido inteiro sem preço: divide igual por peça', () => {
     const order = {

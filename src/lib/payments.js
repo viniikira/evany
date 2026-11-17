@@ -118,9 +118,11 @@ export function summarizePayments(payments = []) {
 }
 
 /** Valida o formulário antes de gravar. @returns {string|null} mensagem de erro */
-export function validatePayment({ payment_date, amount_brl, amount_usd, rate_paid }) {
+export function validatePayment({ payment_date, amount_brl, amount_usd, rate_paid }, { brlOnly = false } = {}) {
   if (!payment_date) return 'Informe a data do pagamento (a do comprovante do banco).'
   if (!(amount_brl > 0) && !(amount_usd > 0)) return 'Informe quanto foi pago em reais.'
+  // v13.84 — pedido de marca parceira é cobrado em reais: não tem câmbio
+  if (brlOnly) return amount_brl > 0 ? null : 'Informe quanto foi pago em reais.'
   if (amount_brl > 0 && !(amount_usd > 0)) return 'Informe o câmbio do dia (ou o valor em dólar).'
   if (rate_paid != null && (rate_paid < 1 || rate_paid > 20)) return 'O câmbio parece errado — confira (ex.: 5,01).'
   return null

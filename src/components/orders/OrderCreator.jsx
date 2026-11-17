@@ -21,6 +21,8 @@ import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalFo
 import { proposeOrderName } from '../../lib/orderNaming'
 import { MoneyInput } from '../MoneyInput'
 import { ReviewPriceTable } from './ReviewPriceTable'
+import { BrandReviewTable } from './BrandReviewTable'
+import { supplierByName, SUPPLIER_KINDS } from '../../lib/suppliers'
 import { computeOrderFinal } from '../../lib/financial'
 import { formatFixedBR } from '../../lib/moneyMask'
 import { buildRestockView, restockForColor, DEFAULT_TARGET_COVER_DAYS } from '../../lib/restock'
@@ -58,16 +60,18 @@ const itemsFromOrder = (src) => (src?.items || []).map(it => ({
   idea_id: null,
   idea_name_snapshot: null,
   price_usd: it.price_usd_snapshot ?? it.price_usd ?? '',
+  price_brl: it.price_brl ?? '',
   requirements: it.requirements || '',
   colors: (it.colors || []).filter(c => c && c.code).map(c => ({
     code: c.code,
     qty: Number(c.qty) || 0,
     price_usd: c.price_usd ?? null,
+    ...(c.price_brl != null ? { price_brl: c.price_brl } : {}),
     _fromProduct: true,
   })),
 }))
 
-export function OrderCreator({ order = null, prefill = null, initialStep = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), shopifyCache = null, onSave, onClose }) {
+export function OrderCreator({ order = null, prefill = null, initialStep = null, initialSupplierKind = null, factories, products, ideas = [], colors = [], orders = [], perm = {}, rate, leadTimeByFactory = new Map(), shopifyCache = null, onSave, onClose }) {
   const confirm = useConfirm()
   const toast = useToast()
   const isEdit = !!(order && order.id)
@@ -93,6 +97,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         order_name: '',
         // v13.60 — duplicando: parte da fábrica/itens do pedido de origem
         factory: prefill?.factory || '',
+        kind: prefill?.kind || initialSupplierKind || 'factory',
         status: 'draft',
         notes: prefill?.notes || '',
         expected_arrival: null,
@@ -131,6 +136,27 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
       items,
     }
   })
+  // ── v13.84 — MARCA PARCEIRA (ex.: Slick): modelos prontos, preço em reais
+  // por pedido. Mesmo criador, com preço R$/peça no lugar de FOB/trading, e
+  // só os modelos daquela marca (nunca mistura com a fabricação própria).
+  const supplier = supplierByName(factories, f.factory)
+  const isBrand = supplier ? supplier.kind === 'brand' : f.kind === 'brand'
+  const PK = isBrand ? 'price_brl' : 'price_usd'
+  const [pickKind, setPickKind] = useState(isBrand ? 'brand' : (initialSupplierKind || 'factory'))
+  // último preço por peça pago a esta marca por este modelo (ponto de partida — segue editável)
+  const lastBrlPrice = (productId) => {
+    let best = null
+    for (const o of (orders || [])) {
+      if (o.currency !== 'BRL' || o.id === order?.id) continue
+      const t = parseDateLocal(o.order_date || o.created_at)?.getTime() || 0
+      for (const it of (o.items || [])) {
+        if (it.product_id !== productId) continue
+        const prices = [Number(it.price_brl), ...(it.colors || []).map(c => Number(c.price_brl))].filter(v => v > 0)
+        if (prices.length && (!best || t > best.t)) best = { t, price: prices[0] }
+      }
+    }
+    return best ? best.price : null
+  }
   const [modelSearch, setModelSearch] = useState('')
   // v13.53 — UI da galeria de cores POR MODELO: busca própria e expandir/recolher.
   // (antes a busca era compartilhada: digitar num card filtrava todos)
@@ -167,13 +193,16 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
   const reuseCandidates = useMemo(() => (
     [...(orders || [])]
       .filter(o => (o.items || []).length > 0)
+      // v13.84 — só pedidos do mesmo lado (fábrica × marca parceira)
+      .filter(o => (o.kind === 'brand' ? 'brand' : 'factory') === pickKind)
       .sort((a, b) => new Date(b.order_date || b.created_at) - new Date(a.order_date || a.created_at))
       .slice(0, 6)
-  ), [orders])
+  ), [orders, pickKind])
   const reuseOrder = (src) => {
     setF(prev => ({
       ...prev,
       factory: src.factory || prev.factory,
+      kind: src.kind || 'factory',
       items: itemsFromOrder(src),
     }))
     setStep(2)
@@ -192,17 +221,21 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
       (x.name || '').toLowerCase().includes(q) ||
       (x.factory_code || '').toLowerCase().includes(q)
 
-    if (!f.factory) return { matching: all.filter(match), undefined_factory: [], other_factory: [], ideas: activeIdeas.filter(match) }
+    if (isBrand) {
+      return { matching: all.filter(p => p && p.kind === 'brand' && p.factory === f.factory && match(p)), undefined_factory: [], other_factory: [], ideas: [] }
+    }
+    if (!f.factory) return { matching: all.filter(p => p?.kind !== 'brand' && match(p)), undefined_factory: [], other_factory: [], ideas: activeIdeas.filter(match) }
     const matching = [], undefined_factory = [], other_factory = []
     for (const p of all) {
       if (!p || !match(p)) continue
+      if (p.kind === 'brand') continue
       const hasSupplier = Array.isArray(p.suppliers) && p.suppliers.some(su => su && su.factory === f.factory)
       if (p.factory === f.factory || hasSupplier) matching.push(p)
       else if (!p.factory) undefined_factory.push(p)
       else other_factory.push(p)
     }
     return { matching, undefined_factory, other_factory, ideas: activeIdeas.filter(match) }
-  }, [products, ideas, f.factory, modelSearch])
+  }, [products, ideas, f.factory, modelSearch, isBrand])
 
   // ── Itens (combinações) ──
   // v13.80 — o modelo novo entra no fim da lista; a tela rola até ele
@@ -234,11 +267,13 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         idea_name_snapshot: isIdea ? source.name : null,
         // v13.53 — sem preço cadastrado? parte da última FOB do histórico
         // (o sistema sabia o preço e deixava 0.00 — agora usa; segue editável)
-        price_usd: (source.price_usd != null && source.price_usd !== '')
+        price_usd: isBrand ? '' : (source.price_usd != null && source.price_usd !== '')
           ? source.price_usd
           : (!isIdea && intelByProduct.get(source.id)?.price?.lastPrice != null
               ? intelByProduct.get(source.id).price.lastPrice
               : ''),
+        // v13.84 — marca: parte do último preço pago por este modelo (editável)
+        price_brl: isBrand ? (lastBrlPrice(source.id) ?? '') : '',
         requirements: '',  // v13.58 — texto pra fábrica na planilha (por modelo)
         colors: [],
       }],
@@ -277,14 +312,14 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
     factory: f.factory || null, targetCoverDays: coverTarget, excludeOrderId: order?.id,
   }), [products, orders, shopifyCache, leadTimeByFactory, f.factory, coverTarget, order?.id])
 
-  const leadDaysNow = leadTimeByFactory.get(f.factory)?.avgDays || 120
+  const leadDaysNow = (isBrand && f.promised_lead_days > 0 ? f.promised_lead_days : null) || leadTimeByFactory.get(f.factory)?.avgDays || 120
   const [radarExpanded, setRadarExpanded] = useState(false)
   // Com a fábrica escolhida, mostra só os modelos dela (+ os sem fábrica)
   const radarUrgent = useMemo(() => (
     f.factory
-      ? radar.urgent.filter(r => !r.product.factory || r.product.factory === f.factory)
+      ? radar.urgent.filter(r => (r.product.kind === 'brand') === isBrand && (!r.product.factory || r.product.factory === f.factory))
       : radar.urgent
-  ), [radar, f.factory])
+  ), [radar, f.factory, isBrand])
 
   // "+ adicionar" do radar: entra com as cores que VENDEM, já com a quantidade
   // sugerida por cor; sem SKU ligado, distribui a sugestão nas cores usuais.
@@ -390,6 +425,11 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
 
   // ── Totais ao vivo (mesma regra de FOB do resto do sistema: preço por cor) ──
   const totals = useMemo(() => {
+    if (isBrand) {
+      const fin = computeOrderFinal({ currency: 'BRL', items: f.items || [] })
+      const qty = (f.items || []).reduce((a, it) => a + (it.colors || []).reduce((b, c) => b + Number(c.qty || 0), 0), 0)
+      return { qty, fob: 0, total: fin.total, confirmedAll: fin.isFullyConfirmed, landed: fin.total, brl: true }
+    }
     let qty = 0, fob = 0
     for (const it of (f.items || [])) {
       const pu = parseFloat(it.price_usd) || 0
@@ -412,7 +452,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
       confirmedAll: fin.isFullyConfirmed,
       landed: effRate > 0 ? fin.total * effRate : null,
     }
-  }, [f.items, effFactor, effRate])
+  }, [f.items, effFactor, effRate, isBrand])
 
   const modelInfo = (it) => {
     if (it.idea_id) {
@@ -505,7 +545,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
   }
 
   const doSave = async () => {
-    const ok = await onSave({ ...f })
+    const ok = await onSave({ ...f, kind: isBrand ? 'brand' : 'factory', currency: isBrand ? 'BRL' : 'USD' })
     if (ok) onClose()
   }
 
@@ -521,6 +561,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
   const canAdvance = step === 1 ? !!f.factory : (f.items || []).some(it => (it.colors || []).some(c => Number(c.qty || 0) > 0))
   // v13.78 — padrão brasileiro (antes: $2,683.50)
   const fmt$ = (n) => 'US$ ' + formatFixedBR(Math.round(n * 100) / 100)
+  // v13.84 — preço na moeda do fornecedor (marca: reais)
+  const fmtP = (n) => (isBrand ? 'R$ ' : 'US$ ') + formatFixedBR(Math.round(n * 100) / 100)
   const fmtR$ = (n) => 'R$ ' + Math.round(n).toLocaleString('pt-BR')
 
   return (
@@ -537,7 +579,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
           <span style={{ fontSize: 17, fontWeight: 700 }}>
             {isEdit ? `✏️ ${f.order_name || 'Editar pedido'}` : '🎨 Novo pedido'}
           </span>
-          {f.factory && <span className="chip" style={{ background: 'var(--primary)', color: '#fff' }}>🏭 {f.factory}</span>}
+          {f.factory && <span className="chip" style={{ background: 'var(--primary)', color: '#fff' }}>{isBrand ? '🏷️' : '🏭'} {f.factory}</span>}
+          {isBrand && <span className="chip" style={{ background: 'var(--hover)', color: 'var(--text-2)' }}>marca parceira · em reais</span>}
           {isEdit && (() => {
             const st = ORDER_ST.find(x => x.id === f.status)
             return st ? <span className="chip" style={{ background: st.color + '22', color: st.color }}>{st.icon} {st.label}</span> : null
@@ -546,7 +589,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           {(isEdit
             ? [{ n: 2, label: 'Modelos e cores' }, { n: 3, label: 'Revisão e preços' }]
-            : [{ n: 1, label: 'Fábrica' }, { n: 2, label: 'Modelos e cores' }, { n: 3, label: 'Revisão e preços' }]
+            : [{ n: 1, label: isBrand || pickKind === 'brand' ? 'Marca' : 'Fábrica' }, { n: 2, label: 'Modelos e cores' }, { n: 3, label: 'Revisão e preços' }]
           ).map((x, i) => (
             <button
               key={x.n}
@@ -568,7 +611,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {/* v13.62 — fator × dólar do custo estimado no Brasil (salvos no pedido) */}
-          {showPrices && step > 1 && (
+          {showPrices && step > 1 && !isBrand && (
             <div
               style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8 }}
               title={`Custo estimado no Brasil = FOB × fator × dólar.\nFator (~1,50–1,80) cobre frete/impostos; dólar você trava no valor que preferir (sugestão: cotação arredondada pra cima).\nOs dois ficam salvos no pedido.`}
@@ -621,16 +664,33 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         {step === 1 && (
           <div style={{ maxWidth: 560, margin: '4vh auto 0' }}>
             {/* v13.72 — fábrica ANTES do nome: é ela que define o nome sugerido */}
-            <label className="field-label">Pra qual fábrica?</label>
+            {/* v13.84 — fábrica (fabricação própria) ou marca parceira (modelos prontos) */}
+            {(factories || []).some(fa => fa.kind === 'brand') && (
+              <div className="chip-bar" style={{ marginBottom: 12 }}>
+                {SUPPLIER_KINDS.map(k => (
+                  <button key={k.id} type="button" className={`chip-filter${pickKind === k.id ? ' on' : ''}`}
+                    title={k.hint}
+                    onClick={() => { setPickKind(k.id); if ((supplier?.kind === 'brand' ? 'brand' : 'factory') !== k.id) setF(prev => ({ ...prev, factory: '', kind: k.id, items: [] })) }}>
+                    {k.id === 'brand' ? 'Marca parceira' : 'Fábrica'}
+                  </button>
+                ))}
+              </div>
+            )}
+            <label className="field-label">{pickKind === 'brand' ? 'De qual marca?' : 'Pra qual fábrica?'}</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, marginTop: 6 }}>
-              {(factories || []).map(fa => {
+              {(factories || []).filter(fa => (fa.kind === 'brand' ? 'brand' : 'factory') === pickKind).map(fa => {
                 const active = f.factory === fa.name
                 const lead = leadTimeByFactory.get(fa.name)
-                const nProds = (products || []).filter(p => p.factory === fa.name || (p.suppliers || []).some(su => su?.factory === fa.name)).length
+                const nProds = (products || []).filter(p => (p.kind === 'brand') === (fa.kind === 'brand') && (p.factory === fa.name || (p.suppliers || []).some(su => su?.factory === fa.name))).length
                 return (
                   <button
                     key={fa.id}
-                    onClick={() => { s('factory', fa.name); if (!isEdit) setStep(2) }}
+                    onClick={() => {
+                      // trocou de fábrica pra marca (ou o contrário): os itens não servem mais
+                      const kind = fa.kind === 'brand' ? 'brand' : 'factory'
+                      setF(prev => ({ ...prev, factory: fa.name, kind, items: (prev.kind || 'factory') === kind ? prev.items : [] }))
+                      if (!isEdit) setStep(2)
+                    }}
                     style={{
                       padding: '16px 14px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
                       border: `2px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
@@ -639,7 +699,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                       transition: 'all .15s',
                     }}
                   >
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>🏭 {fa.name}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{fa.kind === 'brand' ? '🏷️' : '🏭'} {fa.name}</div>
                     <div style={{ fontSize: 11, marginTop: 4, opacity: .8 }}>
                       {nProds} modelo{nProds !== 1 ? 's' : ''}
                       {lead ? ` · ~${lead.avgDays} dias (${lead.sampleSize} pedido${lead.sampleSize !== 1 ? 's' : ''})` : ''}
@@ -658,7 +718,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                 className="field"
                 value={f.order_name}
                 onChange={e => { nameTouched.current = true; s('order_name', e.target.value) }}
-                placeholder={suggestedName || 'Escolha a fábrica acima e o nome vem pronto'}
+                placeholder={suggestedName || (pickKind === 'brand' ? 'Escolha a marca acima e o nome vem pronto' : 'Escolha a fábrica acima e o nome vem pronto')}
               />
               <div className="text-muted" style={{ fontSize: 11.5, marginTop: 5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 {suggestedName && f.order_name !== suggestedName ? (
@@ -673,7 +733,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                     </button>
                   </>
                 ) : (
-                  <span>Mês/ano + fábrica — é o que diferencia dois pedidos do mesmo mês. Pode trocar por qualquer coisa.</span>
+                  <span>Mês/ano + {pickKind === 'brand' ? 'marca' : 'fábrica'} — é o que diferencia dois pedidos do mesmo mês. Pode trocar por qualquer coisa.</span>
                 )}
               </div>
             </div>
@@ -775,7 +835,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                         <span style={{ minWidth: 0 }}>
                           <strong style={{ fontSize: 14 }}>{o.order_name || o.factory}</strong>
                           <span className="text-muted" style={{ fontSize: 12, marginLeft: 8 }}>
-                            🏭 {o.factory} · {nModels} modelo{nModels !== 1 ? 's' : ''} · {pcs} pç · {formatDate(o.order_date || o.created_at, 'full')}
+                            {o.kind === 'brand' ? '🏷️' : '🏭'} {o.factory} · {nModels} modelo{nModels !== 1 ? 's' : ''} · {pcs} pç · {formatDate(o.order_date || o.created_at, 'full')}
                           </span>
                         </span>
                         <span className="text-muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>↻ reaproveitar</span>
@@ -893,10 +953,10 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                   ...galleryBase.filter(c => registered.has((c.code || '').toLowerCase())),
                   ...galleryBase.filter(c => !registered.has((c.code || '').toLowerCase())),
                 ]
-                const pu = parseFloat(it.price_usd) || 0
+                const pu = parseFloat(it[PK]) || 0
                 const itemQty = (it.colors || []).reduce((a, c) => a + Number(c.qty || 0), 0)
                 const itemFob = (it.colors || []).reduce((a, c) => {
-                  const cp = c.price_usd != null && c.price_usd !== '' ? parseFloat(c.price_usd) : pu
+                  const cp = c[PK] != null && c[PK] !== '' ? parseFloat(c[PK]) : pu
                   return a + Number(c.qty || 0) * (cp || 0)
                 }, 0)
 
@@ -914,7 +974,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                         </div>
                         {info.code && <div className="text-muted" style={{ fontSize: 11, fontFamily: 'monospace' }}>{info.code}</div>}
                         <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                          {itemQty} pç{itemQty !== 1 ? 's' : ''}{showPrices && itemFob > 0 ? ` · FOB ${fmt$(itemFob)}` : ''}
+                          {itemQty} pç{itemQty !== 1 ? 's' : ''}{showPrices && itemFob > 0 ? ` · ${isBrand ? 'total' : 'FOB'} ${fmtP(itemFob)}` : ''}
                         </div>
                         {/* v13.75 — RADAR: vende / tem / vem, a informação que decide a quantidade */}
                         {(() => {
@@ -958,7 +1018,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                         {/* Sinais do histórico: alerta de preço + pedido a caminho */}
                         {intel && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
-                            {showPrices && intel.price && intel.price.lastPrice != null && (() => {
+                            {showPrices && !isBrand && intel.price && intel.price.lastPrice != null && (() => {
                               const canApply = pu === 0
                               const Tag = canApply ? 'button' : 'span'
                               return (
@@ -994,8 +1054,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                       </div>
                       {showPrices && (
                         <div style={{ width: 110 }}>
-                          <label className="text-muted" style={{ fontSize: 9, display: 'block', marginBottom: 2 }}>💲 PREÇO USD BASE</label>
-                          <MoneyInput className="field field-sm" value={it.price_usd ?? ''} onChange={v => updItem(it.id, 'price_usd', v ?? '')} ariaLabel="Preço USD base do modelo" />
+                          <label className="text-muted" style={{ fontSize: 9, display: 'block', marginBottom: 2 }}>{isBrand ? '💲 PREÇO R$ POR PEÇA' : '💲 PREÇO USD BASE'}</label>
+                          <MoneyInput className="field field-sm" value={it[PK] ?? ''} onChange={v => updItem(it.id, PK, v ?? '')} ariaLabel={isBrand ? 'Preço por peça em reais (base do modelo)' : 'Preço USD base do modelo'} />
                         </div>
                       )}
                       <button className="btn-icon text-danger" onClick={() => rmItem(it.id)} title="Remover modelo do pedido" aria-label="Remover modelo do pedido">✕</button>
@@ -1007,7 +1067,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                       <input
                         className="field field-sm"
                         style={{ flex: 1, fontSize: 12 }}
-                        placeholder="pra fábrica — ex: hd lace, same hairline, no baby hair, elastic band"
+                        placeholder={isBrand ? 'pra marca — ex: lace transparente, sem baby hair' : 'pra fábrica — ex: hd lace, same hairline, no baby hair, elastic band'}
                         value={it.requirements || ''}
                         onChange={e => updItem(it.id, 'requirements', e.target.value)}
                         title="Instruções deste modelo — sai na coluna Requeriments da planilha da fábrica"
@@ -1142,7 +1202,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                     {/* Combinações modelo+cor */}
                     {(it.colors || []).map((cl, idx) => {
                       const bankColor = (colors || []).find(c => (c.code || '').toLowerCase() === (cl.code || '').toLowerCase())
-                      const colorPrice = cl.price_usd != null && cl.price_usd !== '' ? parseFloat(cl.price_usd) : null
+                      const colorPrice = cl[PK] != null && cl[PK] !== '' ? parseFloat(cl[PK]) : null
                       const effective = colorPrice != null ? colorPrice : pu
                       const hasCustom = colorPrice != null && colorPrice !== pu
                       const lineTotal = Number(cl.qty || 0) * (effective || 0)
@@ -1164,7 +1224,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                               {bankColor?.name_pt || ''}
                               {hasCustom && <span style={{ color: '#B45309' }}>{bankColor?.name_pt ? ' · ' : ''}preço próprio</span>}
                               {/* v13.62 — quanto ESTA peça custa chegando no Brasil */}
-                              {showPrices && effective > 0 && effRate > 0 && (
+                              {showPrices && !isBrand && effective > 0 && effRate > 0 && (
                                 <span title={`${fmt$(effective)} × ${effFactor} × ${effRate.toFixed(2)} — custo estimado por peça no Brasil`}>
                                   {(bankColor?.name_pt || hasCustom) ? ' · ' : ''}≈ {fmtR$(effective * effFactor * effRate)}/un
                                 </span>
@@ -1207,7 +1267,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                           {/* Preço com cara de dinheiro: $ …… /un (herda do modelo se vazio) */}
                           {showPrices && (
                             <div
-                              title={hasCustom ? `Preço próprio desta cor (modelo é ${fmt$(pu)})` : 'Deixe vazio pra herdar o preço do modelo'}
+                              title={hasCustom ? `Preço próprio desta cor (modelo é ${fmtP(pu)})` : 'Deixe vazio pra herdar o preço do modelo'}
                               style={{
                                 display: 'flex', alignItems: 'center', width: 108, flexShrink: 0,
                                 border: `1px solid ${hasCustom ? '#F59E0B' : 'var(--border)'}`,
@@ -1215,12 +1275,12 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                                 padding: '0 8px', height: 32,
                               }}
                             >
-                              <span style={{ fontSize: 12, color: 'var(--text-muted, #6b7280)' }}>$</span>
+                              <span style={{ fontSize: 12, color: 'var(--text-muted, #6b7280)' }}>{isBrand ? 'R$' : '$'}</span>
                               <MoneyInput
                                 className=""
                                 placeholder={pu > 0 ? formatFixedBR(pu) : '0,00'}
-                                value={cl.price_usd ?? ''}
-                                onChange={v => updColor(it.id, idx, 'price_usd', v)}
+                                value={cl[PK] ?? ''}
+                                onChange={v => updColor(it.id, idx, PK, v)}
                                 ariaLabel={`Preço da cor ${cl.code} (vazio herda do modelo)`}
                                 style={{
                                   width: '100%', border: 'none', outline: 'none', background: 'transparent',
@@ -1259,7 +1319,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                           {/* Total só quando existe (nada de "—" solto parecendo sinal de menos) */}
                           {showPrices && (
                             <div style={{ minWidth: 104, textAlign: 'right', fontSize: 13, fontWeight: 700, color: 'var(--text)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                              {lineTotal > 0 ? '= ' + fmt$(lineTotal) : ''}
+                              {lineTotal > 0 ? '= ' + fmtP(lineTotal) : ''}
                             </div>
                           )}
                           <button className="btn-icon text-danger" style={{ width: 26, flexShrink: 0 }} onClick={() => toggleColor(it.id, cl.code, false)} title="Remover combinação" aria-label={`Remover cor ${cl.code}`}>✕</button>
@@ -1317,6 +1377,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
 
             {/* v13.75 — o que este pedido significa: quando chega e quanto dura */}
             {(() => {
+              // v13.84 — marca sem histórico de prazo: só mostra se ela informou o prazo
+              if (isBrand && !leadTimeByFactory.get(f.factory) && !(f.promised_lead_days > 0)) return null
               const start = parseDateLocal(f.order_date) || new Date()
               const eta = new Date(start.getTime() + leadDaysNow * 86400000)
               const etaIso = `${eta.getFullYear()}-${String(eta.getMonth() + 1).padStart(2, '0')}-${String(eta.getDate()).padStart(2, '0')}`
@@ -1334,7 +1396,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
               return (
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '10px 12px', background: 'var(--bg)', borderRadius: 10, marginTop: 6, fontSize: 12 }}>
                   <span title={`Prazo médio da ${f.factory || 'fábrica'}: ${leadDaysNow} dias`}>
-                    ⏳ Se a fábrica levar ~{leadDaysNow} dias, chega por volta de <strong>{formatDate(etaIso, 'full')}</strong>
+                    ⏳ Se {isBrand ? 'a marca' : 'a fábrica'} levar ~{leadDaysNow} dias, chega por volta de <strong>{formatDate(etaIso, 'full')}</strong>
                   </span>
                   {f.expected_arrival !== etaIso && (
                     <button className="btn btn-outline btn-sm" onClick={() => s('expected_arrival', etaIso)}>
@@ -1352,7 +1414,16 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
 
             {/* v13.78 — revisão com preços EDITÁVEIS: FOB e valor final da trading
                 por cor, ali mesmo, salvos junto com o pedido */}
-            <ReviewPriceTable
+            {isBrand ? (
+              <BrandReviewTable
+                items={f.items || []}
+                colors={colors}
+                modelInfo={modelInfo}
+                showPrices={showPrices}
+                onItemField={updItem}
+                onColorField={updColor}
+              />
+            ) : <ReviewPriceTable
               items={f.items || []}
               colors={colors}
               modelInfo={modelInfo}
@@ -1361,12 +1432,12 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
               rate={effRate}
               onItemField={updItem}
               onColorField={updColor}
-            />
+            />}
 
             <div className="form-group" style={{ marginTop: 12 }}>
               <label className="field-label">
                 Aviso geral do pedido
-                <span className="text-muted text-xs" style={{ marginLeft: 6, fontWeight: 400 }}>— sai como banner amarelo no topo da planilha da fábrica</span>
+                <span className="text-muted text-xs" style={{ marginLeft: 6, fontWeight: 400 }}>— sai como banner amarelo no topo da planilha {isBrand ? 'do pedido' : 'da fábrica'}</span>
               </label>
               <textarea className="field" value={f.notes} onChange={e => s('notes', e.target.value)} placeholder="Ex: Our products fiber cant SHINE! All products should have the combs in the cap" />
             </div>
@@ -1381,6 +1452,9 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
       }}>
         <div style={{ display: 'flex', gap: 18, alignItems: 'baseline', fontSize: 13, flexWrap: 'wrap' }}>
           <span><strong style={{ fontSize: 16 }}>{totals.qty}</strong> <span className="text-muted">peças</span></span>
+          {showPrices && totals.brl && totals.total > 0 && (
+            <span style={{ fontWeight: 700, fontSize: 15 }}>total {fmtP(totals.total)}{!totals.confirmedAll && <span className="text-muted" style={{ fontWeight: 400, fontSize: 12 }}> (falta preço em alguma cor)</span>}</span>
+          )}
           {showPrices && totals.fob > 0 && (
             <span style={{ color: '#F59E0B', fontWeight: 700, fontSize: 15 }}>FOB {fmt$(totals.fob)}</span>
           )}
@@ -1399,7 +1473,7 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
           >Cancelar</button>
           {step > (isEdit ? 2 : 1) && (
             <button className="btn btn-outline" onClick={() => setStep(step - 1)}>
-              ← {step === 3 ? 'Modelos e cores' : 'Fábrica e nome'}
+              ← {step === 3 ? 'Modelos e cores' : (isBrand ? 'Marca e nome' : 'Fábrica e nome')}
             </button>
           )}
           {step < 3 && (
@@ -1409,8 +1483,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
           )}
           {/* Planilha da fábrica não tem preços (v13.58) — disponível mesmo no hide mode */}
           {step === 3 && perm.prices && (
-            <button className="btn btn-outline" disabled={exportingSheet} onClick={exportDraftSheet} title="Gera o Excel com fotos no formato enviado à fábrica (sem valores)">
-              {exportingSheet ? '⏳ Gerando...' : '📊 Planilha da fábrica'}
+            <button className="btn btn-outline" disabled={exportingSheet} onClick={exportDraftSheet} title="Gera o Excel com fotos (modelos, cores e quantidades — sem valores)">
+              {exportingSheet ? '⏳ Gerando...' : (isBrand ? '📊 Planilha do pedido' : '📊 Planilha da fábrica')}
             </button>
           )}
           {step === 3 && <SaveButton onSave={doSave}>{isEdit ? 'Salvar alterações' : 'Salvar pedido'}</SaveButton>}

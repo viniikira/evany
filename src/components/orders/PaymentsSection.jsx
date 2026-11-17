@@ -12,6 +12,8 @@
 //     mostra quanto deu em dólar. Se tiver o valor em dólar do contrato, pode
 //     digitar e o câmbio é recalculado.
 //   • Comprovante abre dentro do sistema (ReceiptViewer).
+//   • v13.84 — pedido de MARCA PARCEIRA (currency 'BRL'): só reais, sem câmbio
+//     nem dólar — a marca cobra em reais.
 
 import { useState, useMemo } from 'react'
 import { formatMoneyBR, formatRateBR, resolveAmounts, sortPaymentsChrono, summarizePayments, isEmptyPayment, validatePayment } from '../../lib/payments'
@@ -29,7 +31,9 @@ const usd = (n) => `US$ ${formatMoneyBR(n)}`
 export function PaymentsSection({
   payments = [], adding = false, onStartAdd, onCancelAdd,
   onCreate, onUpdate, onRemove, onAttach, onViewReceipt, readOnly = false,
+  currency = 'USD',
 }) {
+  const brlOnly = currency === 'BRL'
   const [editingId, setEditingId] = useState(null)
   const sorted = useMemo(() => sortPaymentsChrono(payments), [payments])
   const sum = useMemo(() => summarizePayments(payments), [payments])
@@ -49,13 +53,13 @@ export function PaymentsSection({
       )}
 
       {sorted.length > 0 && (
-        <div className="pay-table" role="table" aria-label="Pagamentos do pedido">
+        <div className={`pay-table${brlOnly ? ' brl' : ''}`} role="table" aria-label="Pagamentos do pedido">
           <div className="pay-row pay-head" role="row">
             <span>Nº</span>
             <span>Data</span>
             <span className="num">Pago em reais</span>
-            <span className="num">Câmbio</span>
-            <span className="num">Em dólar</span>
+            {!brlOnly && <span className="num">Câmbio</span>}
+            {!brlOnly && <span className="num">Em dólar</span>}
             <span>Banco</span>
             <span>Arquivo</span>
             <span />
@@ -67,6 +71,7 @@ export function PaymentsSection({
                 title={number ? `Editando o ${number}º pagamento` : 'Preenchendo pagamento'}
                 initial={p}
                 banks={banks}
+                brlOnly={brlOnly}
                 onCancel={() => setEditingId(null)}
                 onSubmit={async (data) => {
                   const ok = await onUpdate(p.id, data)
@@ -91,8 +96,8 @@ export function PaymentsSection({
               <span className="pay-n">{number}º</span>
               <span className={p.payment_date ? '' : 'pay-warn'}>{p.payment_date ? formatDate(p.payment_date, 'full') : 'sem data'}</span>
               <span className="num strong">{Number(p.amount_brl) > 0 ? brl(p.amount_brl) : '—'}</span>
-              <span className="num">{Number(p.rate_paid) > 0 ? formatRateBR(Number(p.rate_paid)) : '—'}</span>
-              <span className="num">{Number(p.amount_usd) > 0 ? usd(p.amount_usd) : '—'}</span>
+              {!brlOnly && <span className="num">{Number(p.rate_paid) > 0 ? formatRateBR(Number(p.rate_paid)) : '—'}</span>}
+              {!brlOnly && <span className="num">{Number(p.amount_usd) > 0 ? usd(p.amount_usd) : '—'}</span>}
               <span className="pay-bank" title={p.bank || undefined}>{p.bank || <em>—</em>}</span>
               <span>
                 {p.receipt_url ? (
@@ -118,8 +123,8 @@ export function PaymentsSection({
               <span />
               <span>Total</span>
               <span className="num strong">{brl(sum.brl)}</span>
-              <span className="num" title={sum.avgRate ? `Câmbio médio: ${formatRateBR(sum.avgRate)} (total em reais ÷ total em dólar)` : undefined}>{sum.avgRate ? formatRateBR(Math.round(sum.avgRate * 100) / 100) : ''}</span>
-              <span className="num strong">{usd(sum.usd)}</span>
+              {!brlOnly && <span className="num" title={sum.avgRate ? `Câmbio médio: ${formatRateBR(sum.avgRate)} (total em reais ÷ total em dólar)` : undefined}>{sum.avgRate ? formatRateBR(Math.round(sum.avgRate * 100) / 100) : ''}</span>}
+              {!brlOnly && <span className="num strong">{usd(sum.usd)}</span>}
               <span /><span /><span />
             </div>
           )}
@@ -132,6 +137,7 @@ export function PaymentsSection({
             title="Novo pagamento"
             initial={{ payment_date: today() }}
             banks={banks}
+            brlOnly={brlOnly}
             withFile
             onCancel={onCancelAdd}
             onSubmit={onCreate}
@@ -149,7 +155,7 @@ export function PaymentsSection({
 // ═════════════════════════════════════════════════════════════
 // Formulário (novo ou editando). Nada é gravado até "Salvar".
 // ═════════════════════════════════════════════════════════════
-function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubmit, onCancel }) {
+function PaymentForm({ title, initial = {}, banks = [], withFile = false, brlOnly = false, onSubmit, onCancel }) {
   const [date, setDate] = useState(initial.payment_date || '')
   // v13.78 — campos estilo calculadora (MoneyInput): guardam número direto
   const [brlVal, setBrl] = useState(Number(initial.amount_brl) > 0 ? Number(initial.amount_brl) : null)
@@ -170,14 +176,16 @@ function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubm
 
   const submit = async (e) => {
     e?.preventDefault()
-    const data = {
-      payment_date: date || null,
-      amount_brl: r.brl > 0 ? r.brl : null,
-      rate_paid: r.rate > 0 ? r.rate : null,
-      amount_usd: r.usd > 0 ? r.usd : null,
-      bank: bank.trim() || null,
-    }
-    const msg = validatePayment(data)
+    const data = brlOnly
+      ? { payment_date: date || null, amount_brl: brlVal > 0 ? brlVal : null, rate_paid: null, amount_usd: null, bank: bank.trim() || null }
+      : {
+          payment_date: date || null,
+          amount_brl: r.brl > 0 ? r.brl : null,
+          rate_paid: r.rate > 0 ? r.rate : null,
+          amount_usd: r.usd > 0 ? r.usd : null,
+          bank: bank.trim() || null,
+        }
+    const msg = validatePayment(data, { brlOnly })
     if (msg) { setError(msg); return }
     setError(null)
     setSaving(true)
@@ -199,7 +207,7 @@ function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubm
             autoFocus={!initial.amount_brl} ariaLabel="Valor pago em reais"
           />
         </label>
-        {!usdMode ? (
+        {brlOnly ? null : !usdMode ? (
           <label className="pay-field">
             <span>Câmbio do dia</span>
             <MoneyInput
@@ -213,7 +221,7 @@ function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubm
             <MoneyInput className="pay-money" prefix="US$" value={usdVal} onChange={setUsd} ariaLabel="Valor em dólar" />
           </label>
         )}
-        <div className="pay-field result">
+        {!brlOnly && <div className="pay-field result">
           <span>{usdMode ? 'Câmbio resultante' : 'Deu em dólar'}</span>
           <strong>
             {usdMode
@@ -223,7 +231,7 @@ function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubm
           <button type="button" className="pay-link" onClick={() => setUsdMode(m => !m)}>
             {usdMode ? 'Usar câmbio do dia' : 'Tenho o valor em dólar'}
           </button>
-        </div>
+        </div>}
         <label className="pay-field">
           <span>Banco</span>
           <input list="pay-banks" placeholder="ex.: Itaú" value={bank} onChange={e => setBank(e.target.value)} />
@@ -237,7 +245,7 @@ function PaymentForm({ title, initial = {}, banks = [], withFile = false, onSubm
         )}
       </div>
 
-      {r.brl > 0 && r.usd > 0 && r.rate > 0 && (
+      {!brlOnly && r.brl > 0 && r.usd > 0 && r.rate > 0 && (
         <div className="pay-formula">
           {brl(r.brl)} ÷ {formatRateBR(r.rate)} = <strong>{usd(r.usd)}</strong>
         </div>
