@@ -20,7 +20,7 @@ import { listFactories } from '../lib/data/misc'
 import { computeFactoryLeadTime, computeOrderDelay } from '../lib/pendencias'
 import { priceSignalForModel, suggestColorsForModel } from '../lib/orderIntelligence'
 import { formatDate, UC, parseDateLocal } from '../lib/utils'
-import { buildProductionView, soonestEta } from '../lib/production'
+import { buildProductionView, soonestEta, buildProductPipeline, PIPELINE_STATUS } from '../lib/production'
 import { buildStoreIndex, storeSignalForProduct } from '../lib/restock'
 import { shopifyCoverageDays, coverageLabel } from '../lib/shopifySlim'
 import '../styles/producao.css'
@@ -67,7 +67,10 @@ export default function ProducaoPage({
   // PARCEIRA (ex.: Slick) não entram aqui (ficam em Pedidos → Marcas parceiras)
   const products = useMemo(() => allProducts.filter(p => p.kind !== 'brand'), [allProducts])
   const orders = useMemo(() => allOrders.filter(o => o.kind !== 'brand'), [allOrders])
-  const [tab, setTab] = useState('production')
+  // v13.87 — 'products' (panorama por produto, padrão) | 'production' (por fábrica) | 'in_transit'
+  const [tab, setTab] = useState('products')
+  // panorama por produto: fabricação própria ou marcas parceiras (nunca juntos)
+  const [side, setSide] = useState('own')
   const [search, setSearch] = useState('')
   const [factoryFilter, setFactoryFilter] = useState('')
   const [sortBy, setSortBy] = useState('risk')
@@ -97,6 +100,25 @@ export default function ProducaoPage({
     for (const g of groups) if (g.outlook?.gapDays > 0) ids.add(g.product.id)
     return ids
   }, [groups])
+
+  // v13.87 — PANORAMA POR PRODUTO: tudo que está vindo de cada modelo
+  const pipeline = useMemo(
+    () => buildProductPipeline({ products: allProducts, orders: allOrders, colors, kind: side }),
+    [allProducts, allOrders, colors, side]
+  )
+  const hasBrandPipeline = useMemo(
+    () => allOrders.some(o => o.kind === 'brand' && !o.deleted_at && PIPELINE_STATUS[o.status]),
+    [allOrders]
+  )
+  const pipelineShown = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return pipeline.filter(p => (!factoryFilter || p.factories.includes(factoryFilter)) && (!q
+      || (p.product.name || '').toLowerCase().includes(q)
+      || (p.product.factory_code || '').toLowerCase().includes(q)
+      || p.colors.some(c => c.code.toLowerCase().includes(q))
+      || p.orders.some(o => o.name.toLowerCase().includes(q))))
+  }, [pipeline, search, factoryFilter])
+  const pipelinePieces = pipeline.reduce((a, p) => a + p.total, 0)
 
   const transit = useMemo(() => orders
     .filter(o => !o.deleted_at && o.status === 'in_transit')
@@ -202,8 +224,12 @@ export default function ProducaoPage({
       {/* ═════════ 2. Controles ═════════ */}
       <div className="pd-toolbar">
         <div className="pd-seg" role="tablist">
+          <button role="tab" aria-selected={tab === 'products'} className={tab === 'products' ? 'on' : ''} onClick={() => setTab('products')}
+            title="Cada modelo com tudo que está vindo dele: em qual pedido, qual fábrica e quantas de cada cor">
+            Por produto <span>{pipeline.length}</span>
+          </button>
           <button role="tab" aria-selected={tab === 'production'} className={tab === 'production' ? 'on' : ''} onClick={() => setTab('production')}>
-            Em produção <span>{nf(k.totalQty)}</span>
+            Por fábrica <span>{nf(k.totalQty)}</span>
           </button>
           <button role="tab" aria-selected={tab === 'in_transit'} className={tab === 'in_transit' ? 'on' : ''} onClick={() => setTab('in_transit')}>
             Em trânsito <span>{nf(transitPieces)}</span>
@@ -216,9 +242,17 @@ export default function ProducaoPage({
           onChange={e => setSearch(e.target.value)}
           aria-label="Buscar"
         />
+        {tab === 'products' && hasBrandPipeline && (
+          <div className="pd-seg" role="tablist" aria-label="Fabricação própria ou marcas parceiras">
+            <button role="tab" aria-selected={side === 'own'} className={side === 'own' ? 'on' : ''} onClick={() => { setSide('own'); setFactoryFilter('') }}>Fábricas</button>
+            <button role="tab" aria-selected={side === 'brand'} className={side === 'brand' ? 'on' : ''} onClick={() => { setSide('brand'); setFactoryFilter('') }}>Marcas parceiras</button>
+          </div>
+        )}
         <select className="pd-input" value={factoryFilter} onChange={e => setFactoryFilter(e.target.value)} aria-label="Fábrica">
-          <option value="">Todas as fábricas</option>
-          {(factories || []).map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+          <option value="">{tab === 'products' && side === 'brand' ? 'Todas as marcas' : 'Todas as fábricas'}</option>
+          {(factories || [])
+            .filter(f => tab === 'products' ? (f.kind === 'brand') === (side === 'brand') : f.kind !== 'brand')
+            .map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
         </select>
         {tab === 'production' && (
           <select className="pd-input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Ordenar">
@@ -235,7 +269,35 @@ export default function ProducaoPage({
       )}
 
       {/* ═════════ 3. Conteúdo ═════════ */}
-      {tab === 'production' ? (
+      {tab === 'products' ? (
+        pipelineShown.length === 0 ? (
+          <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum modelo vindo agora (em revisão, fabricação ou trânsito).'}</div>
+        ) : (
+          <>
+            <div className="pp-summary">
+              <strong>{pipelineShown.length} modelo{pipelineShown.length !== 1 ? 's' : ''}</strong> vindo ·{' '}
+              {nf(pipelineShown.reduce((a, p) => a + p.total, 0))} peças
+              {pipelineShown.length !== pipeline.length && <> (de {nf(pipelinePieces)} no total)</>}
+              <span className="pp-legend">
+                <i className="pp-dot st-in_transit" /> em trânsito
+                <i className="pp-dot st-manufacturing" /> em fabricação
+                <i className="pp-dot st-sent" /> em revisão
+              </span>
+            </div>
+            <div className="pp-list">
+              {pipelineShown.map(p => (
+                <PipelineCard
+                  key={p.product.id}
+                  item={p}
+                  store={hasStore && !p.product._manual ? storeSignalForProduct(p.product, storeIndex, allProducts) : null}
+                  onPhoto={setLb}
+                  onOpenOrder={onOpenOrder}
+                />
+              ))}
+            </div>
+          </>
+        )
+      ) : tab === 'production' ? (
         byFactory.length === 0 ? (
           <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum pedido em produção agora.'}</div>
         ) : byFactory.map(f => (
@@ -287,6 +349,88 @@ export default function ProducaoPage({
         )
       })()}
     </div>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════
+// v13.87 — Panorama de UM modelo: todos os pedidos (qualquer fábrica,
+// revisão/fabricação/trânsito) e quantas de cada cor em cada um
+// ═════════════════════════════════════════════════════════════
+function PipelineCard({ item: p, store, onPhoto, onOpenOrder }) {
+  const photo = p.product.card_image_url || (p.product.photos || [])[0]
+  const etaText = (o) => o.status === 'sent' ? 'aguardando confirmar'
+    : o.isLate ? `atrasado ${o.daysLate} dias`
+    : o.etaDays == null ? 'sem previsão'
+    : o.etaDays < 0 ? `previsão venceu há ${-o.etaDays} dias`
+    : `chega em ${o.etaEstimated ? '~' : ''}${o.etaDays} dias`
+  const cols = `minmax(120px, 1.3fr) repeat(${p.orders.length}, minmax(96px, 1fr)) 72px`
+  return (
+    <article className="pp-card">
+      <header className="pp-head">
+        <button type="button" className="pd-photo" onClick={() => photo && onPhoto(photo)} aria-label={photo ? 'Ampliar foto' : undefined}>
+          {photo ? <img src={photo} alt="" loading="lazy" /> : <span>{(p.product.name || '?').slice(0, 1)}</span>}
+        </button>
+        <div className="pp-title">
+          <h4>{UC(p.product.name || 'Sem nome')}</h4>
+          <span className="pp-sub">
+            {p.factories.join(' · ')}
+            {p.product.factory_code && !p.product._manual && <> · <span className="pp-code">{p.product.factory_code}</span></>}
+          </span>
+          <div className="pp-stages">
+            {['in_transit', 'manufacturing', 'sent'].filter(s => p.byStatus[s] > 0).map(s => (
+              <span key={s} className={`pp-stage st-${s}`}>{nf(p.byStatus[s])} {PIPELINE_STATUS[s].label}</span>
+            ))}
+          </div>
+          {store && (
+            <span className="pp-store">
+              Loja: {store.stock === 0 ? <strong>sem estoque</strong> : <><strong>{nf(store.stock)}</strong> em estoque</>}
+              {store.perDay > 0 && <> · vende {perDayFmt(store.perDay)}/dia</>}
+            </span>
+          )}
+        </div>
+        <div className="pd-card-qty">
+          <strong>{nf(p.total)}</strong>
+          <span>peças vindo</span>
+        </div>
+      </header>
+
+      <div className="pp-table-wrap">
+        <div className="pp-table" role="table" style={{ minWidth: 220 + p.orders.length * 110 }}>
+          <div className="pp-row pp-row-head" role="row" style={{ gridTemplateColumns: cols }}>
+            <span>Cor</span>
+            {p.orders.map(o => (
+              <button key={o.id} type="button" className={`pp-order st-${o.status}${o.isLate ? ' late' : ''}`}
+                onClick={() => onOpenOrder && onOpenOrder(o.id)} title={`Abrir o pedido ${o.name}`}>
+                <strong>{o.name}</strong>
+                <em>{PIPELINE_STATUS[o.status].label} · {etaText(o)}</em>
+              </button>
+            ))}
+            <span className="num">Total</span>
+          </div>
+          {p.colors.map(c => (
+            <div key={c.code} className="pp-row" role="row" style={{ gridTemplateColumns: cols }}>
+              <span className="pp-color" title={c.colorData?.name_pt || undefined}>
+                <span className="pd-swatch" style={{ background: c.colorData?.hex || 'var(--line)' }}>
+                  {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
+                </span>
+                <Code code={c.code} />
+              </span>
+              {p.orders.map(o => (
+                <span key={o.id} className={`num${c.byOrder[o.id] ? '' : ' pp-none'}`}>{c.byOrder[o.id] ? nf(c.byOrder[o.id]) : '—'}</span>
+              ))}
+              <span className="num strong">{nf(c.total)}</span>
+            </div>
+          ))}
+          {p.colors.length > 1 && (
+            <div className="pp-row pp-row-total" role="row" style={{ gridTemplateColumns: cols }}>
+              <span>Total</span>
+              {p.orders.map(o => <span key={o.id} className="num">{nf(o.qty)}</span>)}
+              <span className="num strong">{nf(p.total)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
   )
 }
 

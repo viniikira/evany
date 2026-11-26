@@ -2,7 +2,7 @@
 // v13.73 — Produção derivada dos pedidos. Os casos espelham o banco real de
 // 18/09/2026, onde a tela mostrava 3.400 peças e os pedidos somavam 4.785.
 import { describe, it, expect } from 'vitest'
-import { buildProductionView, soonestEta } from './production'
+import { buildProductionView, soonestEta, buildProductPipeline } from './production'
 
 const NOW = new Date(2026, 8, 18, 12, 0, 0).getTime()   // 18/09/2026 local
 
@@ -159,5 +159,45 @@ describe('chegada estimada por pedido (v13.76)', () => {
     expect(soonestEta([{ etaDays: 90, name: 'a' }, { etaDays: 20, etaEstimated: true, name: 'b' }, { etaDays: null }]))
       .toEqual({ etaDays: 20, etaEstimated: true, orderName: 'b' })
     expect(soonestEta([])).toBe(null)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+// v13.87 — panorama por produto (revisão + fabricação + trânsito juntos)
+// ═══════════════════════════════════════════════════════════════════
+describe('buildProductPipeline — um cartão por modelo', () => {
+  const prods = [
+    { id: 'val', name: 'VALENTINA', factory: 'HAIRCHUAN', color_variants: [{ code: '1B' }] },
+    { id: 'ana', name: 'ANA LACE', kind: 'brand', factory: 'SLEEK' },
+  ]
+  const ords = [
+    { id: 'a', order_name: 'AGO/26 · HAIR FORTUNE', factory: 'HAIR FORTUNE', status: 'manufacturing', order_date: '2026-08-10', promised_lead_days: 90,
+      items: [{ product_id: 'val', colors: [{ code: '1b', qty: 250 }, { code: 'TT2/CARMEL', qty: 100 }] }] },
+    { id: 'b', order_name: 'NOVEMBRO 2025', factory: 'HAIRCHUAN', status: 'in_transit', expected_arrival: '2026-10-01',
+      items: [{ product_id: 'val', colors: [{ code: '1B', qty: 50 }] }] },
+    { id: 'c', order_name: 'Rascunho', factory: 'EPF', status: 'draft', items: [{ product_id: 'val', colors: [{ code: '1B', qty: 999 }] }] },
+    { id: 'd', order_name: 'Concluído', factory: 'EPF', status: 'completed', items: [{ product_id: 'val', colors: [{ code: '1B', qty: 999 }] }] },
+    { id: 'e', order_name: 'SLEEK 1', factory: 'SLEEK', kind: 'brand', status: 'sent', items: [{ product_id: 'ana', colors: [{ code: '2', qty: 25 }] }] },
+  ]
+  const r = buildProductPipeline({ products: prods, orders: ords, colors: [{ code: 'TT2-CARMEL' }], now: NOW })
+
+  it('junta fábricas e etapas do mesmo modelo; ignora rascunho e concluído', () => {
+    expect(r).toHaveLength(1)
+    const v = r[0]
+    expect(v.product.name).toBe('VALENTINA')
+    expect(v.total).toBe(400)
+    expect(v.byStatus).toEqual({ sent: 0, manufacturing: 350, in_transit: 50 })
+    expect(v.factories).toEqual(['HAIRCHUAN', 'HAIR FORTUNE'])   // trânsito primeiro
+  })
+  it('por cor, quanto em cada pedido (grafias da cor unificadas)', () => {
+    const black = r[0].colors.find(c => c.code === '1B')
+    expect(black.total).toBe(300)
+    expect(black.byOrder).toEqual({ a: 250, b: 50 })
+    expect(r[0].colors.find(c => c.code === 'TT2-CARMEL').byOrder).toEqual({ a: 100 })
+  })
+  it('marcas parceiras num panorama separado', () => {
+    const b = buildProductPipeline({ products: prods, orders: ords, now: NOW, kind: 'brand' })
+    expect(b.map(x => x.product.name)).toEqual(['ANA LACE'])
+    expect(b[0].byStatus.sent).toBe(25)
   })
 })

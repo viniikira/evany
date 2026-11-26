@@ -20,6 +20,7 @@
 
 import { computeFactoryLeadTime, computeOrderDelay } from './pendencias'
 import { parseDateLocal } from './utils'
+import { colorKey } from './orderIntelligence'
 
 const PRODUCING = new Set(['sent', 'manufacturing'])
 const DAY = 86400000
@@ -67,6 +68,86 @@ function productOf(item, order, productsById) {
     key: `manual:${norm(name)}`,
     product: { id: `manual:${norm(name)}`, name, factory: order.factory, _manual: true },
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v13.87 — PANORAMA POR PRODUTO
+// Ela pediu: "separar por produto, não por pedido nem por fábrica — Valentina:
+// está sendo feita em tal; essa cor em tal; um panorama geral".
+// Um cartão por modelo juntando TUDO que está vindo dele (em revisão, em
+// fabricação e em trânsito), em qualquer fábrica/pedido, com a quantidade
+// por cor em cada pedido.
+// ═══════════════════════════════════════════════════════════════════
+export const PIPELINE_STATUS = {
+  sent: { label: 'em revisão', rank: 2 },
+  manufacturing: { label: 'em fabricação', rank: 1 },
+  in_transit: { label: 'em trânsito', rank: 0 },
+}
+
+/**
+ * @param kind 'own' (fabricação própria) | 'brand' (marcas parceiras)
+ * @returns Array<{product, total, byStatus:{sent,manufacturing,in_transit}, factories:string[],
+ *   orders: Array<{id,name,status,factory,expectedArrival,etaDays,etaEstimated,isLate,daysLate,qty}>,
+ *   colors: Array<{code, colorData, total, byOrder: Object<orderId, qty>}>}>
+ */
+export function buildProductPipeline({ products = [], orders = [], colors = [], now = Date.now(), kind = 'own' } = {}) {
+  const productsById = new Map(products.map(p => [p.id, p]))
+  const colorsByKey = new Map(colors.map(c => [colorKey(c.code), c]))
+  const lead = computeFactoryLeadTime(orders)
+  const today = startOfToday(now)
+  const wantBrand = kind === 'brand'
+  const map = new Map()
+
+  for (const o of orders) {
+    if (!isLive(o) || !PIPELINE_STATUS[o.status]) continue
+    if ((o.kind === 'brand') !== wantBrand) continue
+    const delay = o.status === 'in_transit' ? null : computeOrderDelay(o, lead, now)
+    const info = {
+      id: o.id,
+      name: o.order_name || `${o.factory} (sem nome)`,
+      status: o.status,
+      factory: (o.factory || '').trim() || '— sem fábrica —',
+      expectedArrival: o.expected_arrival || null,
+      isLate: !!delay?.isLate,
+      daysLate: delay?.daysLate || 0,
+      ...etaOf(o, delay, today),
+    }
+    for (const it of (o.items || [])) {
+      const { key, product } = productOf(it, o, productsById)
+      for (const c of (it.colors || [])) {
+        const qty = Number(c.qty) || 0
+        if (!c.code || qty <= 0) continue
+        if (!map.has(key)) map.set(key, { product, total: 0, byStatus: { sent: 0, manufacturing: 0, in_transit: 0 }, orders: new Map(), colors: new Map() })
+        const p = map.get(key)
+        p.total += qty
+        p.byStatus[o.status] += qty
+        if (!p.orders.has(o.id)) p.orders.set(o.id, { ...info, qty: 0 })
+        p.orders.get(o.id).qty += qty
+        const ck = colorKey(c.code)
+        if (!p.colors.has(ck)) {
+          const cv = (product.color_variants || []).find(v => colorKey(v.code) === ck)
+          p.colors.set(ck, { code: (cv?.code || colorsByKey.get(ck)?.code || c.code).trim(), colorData: colorsByKey.get(ck) || null, total: 0, byOrder: {} })
+        }
+        const col = p.colors.get(ck)
+        col.total += qty
+        col.byOrder[o.id] = (col.byOrder[o.id] || 0) + qty
+      }
+    }
+  }
+
+  return [...map.values()].map(p => {
+    const ords = [...p.orders.values()].sort((a, b) =>
+      PIPELINE_STATUS[a.status].rank - PIPELINE_STATUS[b.status].rank || (a.etaDays ?? 1e9) - (b.etaDays ?? 1e9))
+    return {
+      product: p.product,
+      total: p.total,
+      byStatus: p.byStatus,
+      factories: [...new Set(ords.map(o => o.factory))],
+      orders: ords,
+      colors: [...p.colors.values()].sort((a, b) => b.total - a.total || a.code.localeCompare(b.code)),
+      nextEta: soonestEta(ords),
+    }
+  }).sort((a, b) => b.total - a.total || (a.product.name || '').localeCompare(b.product.name || ''))
 }
 
 export function buildProductionView({ products = [], orders = [], colors = [], now = Date.now() } = {}) {
