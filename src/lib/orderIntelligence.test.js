@@ -7,6 +7,9 @@ import {
   suggestColorsForModel,
   inFlightForModel,
   priceSignalForModel,
+  openOrdersForModel,
+  findRepeatedLines,
+  colorKey,
 } from './orderIntelligence'
 
 const order = (over) => ({
@@ -81,6 +84,46 @@ describe('suggestColorsForModel', () => {
     const r = suggestColorsForModel('p1', orders)
     const total = r.reduce((a, c) => a + c.totalQty, 0)
     expect(total).toBe(20 + 30 + 10 + 25) // sem os 999 do rascunho
+  })
+})
+
+describe('openOrdersForModel — não pedir repetido (v13.86)', () => {
+  const os = [
+    order({ _n: 10, status: 'manufacturing', order_name: 'W-260311L · SLEEK', expected_arrival: '2027-01-20', items: [
+      { product_id: 'p9', colors: [{ code: '2', qty: 25 }, { code: 'TT2/CARMEL', qty: 25 }, { code: 'F5/6A', qty: 0 }] },
+    ] }),
+    order({ _n: 11, status: 'draft', order_name: 'NOV/26 · SLEEK', items: [
+      { product_id: 'p9', colors: [{ code: '2', qty: 30 }] },
+      { product_id: 'p9', colors: [{ code: '1b', qty: 10 }] },   // mesmo modelo 2x no pedido
+    ] }),
+    order({ _n: 12, status: 'completed', items: [{ product_id: 'p9', colors: [{ code: '613', qty: 25 }] }] }),
+    order({ _n: 13, status: 'in_transit', deleted_at: '2026-11-01', items: [{ product_id: 'p9', colors: [{ code: '613', qty: 5 }] }] }),
+  ]
+  it('junta pedidos abertos E rascunhos, ignora concluído e lixeira', () => {
+    const r = openOrdersForModel('p9', os)
+    expect(r.orders.map(o => o.orderName)).toEqual(['W-260311L · SLEEK', 'NOV/26 · SLEEK'])
+    expect(r.orders[1].isDraft).toBe(true)
+    expect(r.pieces).toBe(25 + 25 + 30 + 10)
+  })
+  it('por cor, aceitando grafias diferentes da mesma cor', () => {
+    const r = openOrdersForModel('p9', os)
+    expect(r.byColor.get(colorKey('2')).map(x => x.qty)).toEqual([25, 30])
+    expect(r.byColor.get(colorKey('TT2-CARMEL'))[0].orderName).toBe('W-260311L · SLEEK')
+    expect(r.byColor.get(colorKey('1B'))[0].qty).toBe(10)
+    expect(r.byColor.has(colorKey('F5/6A'))).toBe(false)   // qty 0 não conta
+    expect(r.byColor.has(colorKey('613'))).toBe(false)
+  })
+  it('editando um pedido, ele mesmo não conta', () => {
+    const r = openOrdersForModel('p9', os, { excludeOrderId: 'o11' })
+    expect(r.orders).toHaveLength(1)
+  })
+  it('findRepeatedLines aponta só as combinações repetidas', () => {
+    const items = [{ id: 'x', product_id: 'p9', colors: [{ code: 'tt2-carmel', qty: 25 }, { code: 'C2', qty: 25 }, { code: '2', qty: 0 }] }]
+    const r = findRepeatedLines(items, os)
+    expect(r).toHaveLength(1)
+    expect(r[0].code).toBe('tt2-carmel')
+    expect(r[0].colorIndex).toBe(0)
+    expect(r[0].others[0].orderName).toBe('W-260311L · SLEEK')
   })
 })
 

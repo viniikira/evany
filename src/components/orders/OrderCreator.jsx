@@ -17,7 +17,7 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import { ColorSwatch } from '../ColorSwatch'
 import { SaveButton, useConfirm, useToast } from '../ui'
 import { generateFactorySheet } from '../../lib/factorySheet'
-import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel } from '../../lib/orderIntelligence'
+import { suggestQuantity, suggestColorsForModel, inFlightForModel, priceSignalForModel, openOrdersForModel, findRepeatedLines, colorKey } from '../../lib/orderIntelligence'
 import { proposeOrderName } from '../../lib/orderNaming'
 import { MoneyInput } from '../MoneyInput'
 import { ReviewPriceTable } from './ReviewPriceTable'
@@ -38,6 +38,15 @@ const RADAR_TONE = {
   parado:    { icon: '⚪', label: 'sem venda no período', bg: '#F3F4F6', fg: '#4B5563' },
   sem_dados: { icon: '⚪', label: 'sem dados da loja', bg: '#F3F4F6', fg: '#4B5563' },
 }
+
+// v13.86 — onde mais o modelo/cor já está (pra não pedir repetido)
+const OPEN_ST = {
+  draft: { label: 'rascunho', bg: '#F3F4F6', fg: '#374151' },
+  sent: { label: 'em revisão', bg: '#DBEAFE', fg: '#1E40AF' },
+  manufacturing: { label: 'em fabricação', bg: '#FEF3C7', fg: '#92400E' },
+  in_transit: { label: 'em trânsito', bg: '#EDE9FE', fg: '#5B21B6' },
+}
+const openWhere = (list) => (list || []).map(x => `${x.qty} no ${x.orderName} (${OPEN_ST[x.status]?.label || x.status})`).join(' · ')
 
 const DEFAULT_QTY = 10
 const QTY_STEP = 5
@@ -295,6 +304,8 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
         price: priceSignalForModel(id, orders),
         // Editando, o próprio pedido não conta como "já vindo"
         inFlight: inFlightForModel(id, orders, { excludeOrderId: order?.id }),
+        // v13.86 — pedidos ABERTOS (rascunho incluso) com este modelo, por cor
+        open: openOrdersForModel(id, orders, { excludeOrderId: order?.id }),
         suggestedColors: suggestColorsForModel(id, orders),
       })
     }
@@ -559,6 +570,11 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
     return () => document.removeEventListener('keydown', onEsc)
   }, [])
 
+  // v13.86 — combinações deste pedido que já estão em outro pedido aberto
+  const repeatedLines = useMemo(
+    () => findRepeatedLines(f.items || [], orders || [], { excludeOrderId: order?.id }),
+    [f.items, orders, order?.id]
+  )
   const canAdvance = step === 1 ? !!f.factory : (f.items || []).some(it => (it.colors || []).some(c => Number(c.qty || 0) > 0))
   // v13.78 — padrão brasileiro (antes: $2,683.50)
   const fmt$ = (n) => 'US$ ' + formatFixedBR(Math.round(n * 100) / 100)
@@ -901,6 +917,19 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                             <div style={{ padding: '6px 8px' }}>
                               <div style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text)' }}>{UC(m.name)}</div>
                               {m.factory_code && <div className="text-muted" style={{ fontSize: 10, fontFamily: 'monospace' }}>{m.factory_code}</div>}
+                              {/* v13.86 — já está em outro pedido aberto? avisa antes de escolher */}
+                              {(() => {
+                                const op = !g.isIdea ? intelByProduct.get(m.id)?.open : null
+                                if (!op || op.orders.length === 0) return null
+                                return (
+                                  <div
+                                    title={op.orders.map(o => `${o.orderName} (${OPEN_ST[o.status]?.label}): ${o.colors.map(c => `${c.code} ×${c.qty}`).join(', ')}`).join('\n')}
+                                    style={{ marginTop: 4, fontSize: 10, fontWeight: 700, color: '#92400E', background: '#FEF3C7', borderRadius: 5, padding: '2px 5px', lineHeight: 1.3 }}
+                                  >
+                                    ⏳ {op.pieces} pç em {op.orders.length} pedido{op.orders.length !== 1 ? 's' : ''} aberto{op.orders.length !== 1 ? 's' : ''}
+                                  </div>
+                                )
+                              })()}
                             </div>
                           </button>
                         )
@@ -1040,16 +1069,6 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                                 </Tag>
                               )
                             })()}
-                            {(intel.inFlight || []).map(fl => (
-                              <span
-                                key={fl.orderId}
-                                className="chip"
-                                style={{ fontSize: 10, background: '#FEF3C7', color: '#92400E' }}
-                                title={fl.colors.map(c => `${c.code} ×${c.qty}`).join(', ')}
-                              >
-                                ⏳ já vindo: {fl.orderName}{fl.expectedArrival ? ` · chega ${formatDate(fl.expectedArrival, 'full')}` : ''}
-                              </span>
-                            ))}
                           </div>
                         )}
                       </div>
@@ -1061,6 +1080,42 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                       )}
                       <button className="btn-icon text-danger" onClick={() => rmItem(it.id)} title="Remover modelo do pedido" aria-label="Remover modelo do pedido">✕</button>
                     </div>
+
+                    {/* v13.86 — NÃO PEDIR REPETIDO: este modelo já está nestes pedidos abertos */}
+                    {intel?.open?.orders?.length > 0 && (
+                      <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', background: '#FFFBEB' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', marginBottom: 6 }}>
+                          ⏳ Este modelo já está em {intel.open.orders.length} pedido{intel.open.orders.length !== 1 ? 's' : ''} aberto{intel.open.orders.length !== 1 ? 's' : ''} — confira pra não pedir repetido
+                        </div>
+                        {intel.open.orders.map(o => {
+                          const st = OPEN_ST[o.status] || OPEN_ST.draft
+                          return (
+                            <div key={o.orderId} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '3px 0' }}>
+                              <span style={{ background: st.bg, color: st.fg, borderRadius: 5, padding: '1px 6px', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap' }}>{st.label}</span>
+                              <strong>{o.orderName}</strong>
+                              {o.expectedArrival && <span className="text-muted" style={{ fontSize: 11 }}>chega {formatDate(o.expectedArrival, 'full')}</span>}
+                              <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                {o.colors.map(c => {
+                                  const repeated = (it.colors || []).some(x => Number(x.qty) > 0 && colorKey(x.code) === colorKey(c.code))
+                                  return (
+                                    <span key={c.code} title={repeated ? 'Você também está pedindo esta cor aqui' : undefined}
+                                      style={{
+                                        fontSize: 11, borderRadius: 5, padding: '0 6px', whiteSpace: 'nowrap',
+                                        background: repeated ? '#FEE2E2' : 'var(--surface)',
+                                        color: repeated ? '#991B1B' : 'var(--text)',
+                                        border: `1px solid ${repeated ? '#FCA5A5' : 'var(--border)'}`,
+                                        fontWeight: repeated ? 700 : 400,
+                                      }}>
+                                      {repeated ? '⚠ ' : ''}{c.code} ×{c.qty}
+                                    </span>
+                                  )
+                                })}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
 
                     {/* v13.58 — Requeriments pra fábrica (vai na planilha, por modelo) */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
@@ -1125,9 +1180,10 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                                 key={sc.code}
                                 onClick={() => toggleColor(it.id, sc.code, registered.has((sc.code || '').toLowerCase()))}
                                 className="chip"
-                                style={{ cursor: 'pointer', fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
-                                title={`Adicionar ${sc.code} — média ${sc.avgQty}un em ${sc.count} pedido(s)`}
+                                style={{ cursor: 'pointer', fontSize: 11, background: 'var(--bg)', border: `1px solid ${intel?.open?.byColor?.has(colorKey(sc.code)) ? '#F59E0B' : 'var(--border)'}`, color: 'var(--text)' }}
+                                title={`Adicionar ${sc.code} — média ${sc.avgQty}un em ${sc.count} pedido(s)${intel?.open?.byColor?.has(colorKey(sc.code)) ? `\n⏳ já tem: ${openWhere(intel.open.byColor.get(colorKey(sc.code)))}` : ''}`}
                               >
+                                {intel?.open?.byColor?.has(colorKey(sc.code)) && '⏳ '}
                                 + {sc.code} <span className="text-muted">~{sc.avgQty}</span>
                               </button>
                             ))}
@@ -1138,11 +1194,12 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                         {gallery.map(c => {
                           const isSel = selectedCodes.has((c.code || '').toLowerCase())
                           const isReg = registered.has((c.code || '').toLowerCase())
+                          const openHere = intel?.open?.byColor?.get(colorKey(c.code))
                           return (
                             <button
                               key={c.id}
                               onClick={() => toggleColor(it.id, c.code, isReg)}
-                              title={`${c.code}${c.name_pt ? ' · ' + c.name_pt : ''}${isSel ? ' (remover)' : ''}`}
+                              title={`${c.code}${c.name_pt ? ' · ' + c.name_pt : ''}${isSel ? ' (remover)' : ''}${openHere ? `\n⏳ já tem: ${openWhere(openHere)}` : ''}`}
                               style={{
                                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
                                 background: 'none', border: 'none', cursor: 'pointer', padding: 2, width: 62,
@@ -1153,6 +1210,13 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                                   {c.photo_url && <img src={c.photo_url} alt={c.code} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
                                 </div>
                                 {isReg && <span style={{ position: 'absolute', top: -4, right: -4, fontSize: 11 }}>⭐</span>}
+                                {openHere && (
+                                  <span style={{
+                                    position: 'absolute', top: -4, left: -4, height: 17, minWidth: 17, padding: '0 3px', borderRadius: 9,
+                                    background: '#F59E0B', color: '#fff', fontSize: 9, fontWeight: 700,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  }}>⏳</span>
+                                )}
                                 {isSel && (
                                   <span style={{
                                     position: 'absolute', bottom: -2, right: -2, width: 17, height: 17, borderRadius: '50%',
@@ -1231,6 +1295,16 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                                 </span>
                               )}
                             </div>
+                            {/* v13.86 — esta combinação já está em outro pedido aberto */}
+                            {(() => {
+                              const others = intel?.open?.byColor?.get(colorKey(cl.code))
+                              if (!others || others.length === 0) return null
+                              return (
+                                <div style={{ fontSize: 11, color: '#991B1B', fontWeight: 600, marginTop: 2 }}>
+                                  ⚠ já tem {openWhere(others)}
+                                </div>
+                              )
+                            })()}
                             {/* v13.75 — esta COR na loja: estoque, venda e o que já vem */}
                             {cr && (
                               <div style={{ fontSize: 10, color: cr.stock === 0 && cr.perDay > 0 ? '#DC2626' : 'var(--text-muted, #6b7280)', marginTop: 2 }}>
@@ -1412,6 +1486,26 @@ export function OrderCreator({ order = null, prefill = null, initialStep = null,
                 </div>
               )
             })()}
+
+            {/* v13.86 — ANTES DE SALVAR: o que deste pedido já está em outro pedido aberto */}
+            {repeatedLines.length > 0 && (
+              <div style={{ border: '1px solid #FCA5A5', background: '#FEF2F2', borderRadius: 12, padding: '12px 14px', margin: '12px 0' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#991B1B', marginBottom: 6 }}>
+                  ⚠ {repeatedLines.length} combinaç{repeatedLines.length !== 1 ? 'ões' : 'ão'} deste pedido já {repeatedLines.length !== 1 ? 'estão' : 'está'} em outro pedido aberto
+                </div>
+                {repeatedLines.map(r => (
+                  <div key={r.itemId + '-' + r.colorIndex} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12, padding: '5px 0', borderTop: '1px solid #FECACA' }}>
+                    <strong style={{ minWidth: 150 }}>{UC(modelInfo({ product_id: r.productId }).name)} · {r.code} <span className="text-muted" style={{ fontWeight: 400 }}>×{r.qty} aqui</span></strong>
+                    <span style={{ flex: 1, color: '#7F1D1D' }}>já tem {openWhere(r.others)}</span>
+                    <button type="button" className="btn btn-outline btn-sm" onClick={() => updColor(r.itemId, r.colorIndex, 'qty', 0)}
+                      title="Zera esta cor neste pedido (ela não vai ser salva). Dá pra voltar digitando a quantidade de novo.">
+                      Tirar deste pedido
+                    </button>
+                  </div>
+                ))}
+                <div className="text-muted" style={{ fontSize: 11, marginTop: 6 }}>Se for de propósito (reposição extra), pode salvar assim mesmo.</div>
+              </div>
+            )}
 
             {/* v13.78 — revisão com preços EDITÁVEIS: FOB e valor final da trading
                 por cor, ali mesmo, salvos junto com o pedido */}
