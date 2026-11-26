@@ -85,6 +85,26 @@
 .pp-color .pd-swatch { width: 24px; height: 24px; flex-shrink: 0 }
 .pp-none { color: var(--text-muted) }
 .pp-row-total { background: var(--hover); font-weight: 600 }
+/* v13.88 — em revisão: sempre à parte, tracejado, nunca somado ao confirmado */
+.pp-plus-rv { font-size: 12px; font-weight: 600; color: var(--st-sent) }
+.pp-rv-text { color: var(--st-sent) }
+.pd-rv-small { font-style: normal; font-size: 11px; font-weight: 600; white-space: nowrap }
+.pp-dot.rv { background: transparent; border: 1.5px dashed var(--st-sent); width: 7px; height: 7px }
+.pp-stage.rv { background: transparent; border: 1px dashed var(--st-sent); line-height: 19px }
+.pp-rv { background: color-mix(in srgb, var(--st-sent) 6%, transparent); color: var(--st-sent); margin: -4px 0; padding: 4px 6px }
+.pp-rv.pp-none { color: var(--text-muted) }
+.pp-rv-head { color: var(--st-sent) }
+.pp-order.st-sent { border-top-style: dashed; background: color-mix(in srgb, var(--st-sent) 6%, transparent) }
+.pp-row-group { padding-top: 6px; padding-bottom: 0; border-top: 0; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-2) }
+.pp-group { text-align: center; border-bottom: 1px solid var(--line); padding-bottom: 3px }
+.pp-group.rv { color: var(--st-sent); border-bottom: 1px dashed var(--st-sent) }
+.pp-card.only-rv, .pd-card.only-rv { border-style: dashed; border-color: color-mix(in srgb, var(--st-sent) 45%, var(--border)) }
+.pd-card-qty.rv strong { color: var(--st-sent) }
+.pd-order.rv { border-style: dashed; border-color: color-mix(in srgb, var(--st-sent) 50%, var(--line)); background: transparent }
+.pd-order.rv em { color: var(--st-sent) }
+.pp-section { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 16px; margin: 22px 2px 10px }
+.pp-section.rv { color: var(--st-sent) }
+.pp-section span { font-size: 13px; font-weight: 400; color: var(--text-2) }
 @media (max-width: 640px) {
   .pp-legend { margin-left: 0 }
   .pp-head { flex-wrap: wrap }

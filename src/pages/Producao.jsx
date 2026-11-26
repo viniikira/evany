@@ -89,7 +89,8 @@ export default function ProducaoPage({
 
   // Cada card (fábrica × modelo) com a chegada mais próxima e a situação na loja
   const groups = useMemo(() => view.groups.map(g => {
-    const eta = soonestEta(g.orders)
+    // v13.88 — revisão não é chegada: a previsão/risco vem só do confirmado
+    const eta = soonestEta(g.orders.filter(o => o.status !== 'sent'))
     const outlook = hasStore ? storeOutlook(storeSignalForProduct(g.product, storeIndex, products), eta) : null
     return { ...g, eta, outlook, outlookChecked: hasStore }
   }), [view, storeIndex, products, hasStore])
@@ -119,6 +120,12 @@ export default function ProducaoPage({
       || p.orders.some(o => o.name.toLowerCase().includes(q))))
   }, [pipeline, search, factoryFilter])
   const pipelinePieces = pipeline.reduce((a, p) => a + p.total, 0)
+  // v13.88 — em revisão fica separado (não é produção ainda)
+  const pipelineConf = pipelineShown.filter(p => !p.onlyReview)
+  const pipelineRev = pipelineShown.filter(p => p.onlyReview)
+  const pipelineReviewPieces = pipelineShown.reduce((a, p) => a + p.review, 0)
+  const pipelineReviewOrders = new Set(pipelineShown.flatMap(p => p.reviewOrders.map(o => o.id))).size
+  const pipelineConfCount = pipeline.filter(p => !p.onlyReview).length
 
   const transit = useMemo(() => orders
     .filter(o => !o.deleted_at && o.status === 'in_transit')
@@ -146,15 +153,16 @@ export default function ProducaoPage({
   const byFactory = useMemo(() => {
     const q = search.trim().toLowerCase()
     const list = groups
+      .filter(g => g.confirmedQty > 0)
       .filter(g => !factoryFilter || g.factoryName === factoryFilter)
       .filter(g => !q
         || (g.product.name || '').toLowerCase().includes(q)
         || g.cores.some(c => (c.code || '').toLowerCase().includes(q))
         || g.orders.some(o => (o.name || '').toLowerCase().includes(q)))
     const sorters = {
-      risk: (a, b) => (b.outlook?.gapDays || 0) - (a.outlook?.gapDays || 0) || b.totalQty - a.totalQty,
-      pieces: (a, b) => b.totalQty - a.totalQty,
-      arrival: (a, b) => (a.eta?.etaDays ?? 1e9) - (b.eta?.etaDays ?? 1e9) || b.totalQty - a.totalQty,
+      risk: (a, b) => (b.outlook?.gapDays || 0) - (a.outlook?.gapDays || 0) || b.confirmedQty - a.confirmedQty,
+      pieces: (a, b) => b.confirmedQty - a.confirmedQty,
+      arrival: (a, b) => (a.eta?.etaDays ?? 1e9) - (b.eta?.etaDays ?? 1e9) || b.confirmedQty - a.confirmedQty,
       alpha: (a, b) => (a.product.name || '').localeCompare(b.product.name || ''),
     }
     list.sort(sorters[sortBy] || sorters.risk)
@@ -166,12 +174,25 @@ export default function ProducaoPage({
     return [...m.entries()].map(([name, gs]) => ({
       name,
       groups: gs,
-      pieces: gs.reduce((a, g) => a + g.totalQty, 0),
+      pieces: gs.reduce((a, g) => a + g.confirmedQty, 0),
       review: gs.reduce((a, g) => a + (g.reviewQty || 0), 0),
       risk: gs.filter(g => g.outlook?.gapDays > 0).length,
-      eta: soonestEta(gs.flatMap(g => g.orders)),
+      eta: soonestEta(gs.map(g => g.eta).filter(Boolean).map(e => ({ etaDays: e.etaDays, etaEstimated: e.etaEstimated, name: e.orderName }))),
     })).sort((a, b) => b.pieces - a.pieces)
   }, [groups, search, factoryFilter, sortBy])
+
+  // v13.88 — modelos que SÓ estão em pedido em revisão (ainda não confirmados)
+  const reviewOnlyGroups = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return groups
+      .filter(g => g.confirmedQty === 0 && g.reviewQty > 0)
+      .filter(g => !factoryFilter || g.factoryName === factoryFilter)
+      .filter(g => !q
+        || (g.product.name || '').toLowerCase().includes(q)
+        || g.cores.some(c => (c.code || '').toLowerCase().includes(q))
+        || g.orders.some(o => (o.name || '').toLowerCase().includes(q)))
+      .sort((a, b) => b.reviewQty - a.reviewQty)
+  }, [groups, search, factoryFilter])
 
   const transitShown = transit.filter(t => {
     if (factoryFilter && t.order.factory !== factoryFilter) return false
@@ -226,10 +247,10 @@ export default function ProducaoPage({
         <div className="pd-seg" role="tablist">
           <button role="tab" aria-selected={tab === 'products'} className={tab === 'products' ? 'on' : ''} onClick={() => setTab('products')}
             title="Cada modelo com tudo que está vindo dele: em qual pedido, qual fábrica e quantas de cada cor">
-            Por produto <span>{pipeline.length}</span>
+            Por produto <span>{pipelineConfCount}</span>
           </button>
           <button role="tab" aria-selected={tab === 'production'} className={tab === 'production' ? 'on' : ''} onClick={() => setTab('production')}>
-            Por fábrica <span>{nf(k.totalQty)}</span>
+            Por fábrica <span>{nf(k.manufacturingQty)}</span>
           </button>
           <button role="tab" aria-selected={tab === 'in_transit'} className={tab === 'in_transit' ? 'on' : ''} onClick={() => setTab('in_transit')}>
             Em trânsito <span>{nf(transitPieces)}</span>
@@ -271,21 +292,24 @@ export default function ProducaoPage({
       {/* ═════════ 3. Conteúdo ═════════ */}
       {tab === 'products' ? (
         pipelineShown.length === 0 ? (
-          <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum modelo vindo agora (em revisão, fabricação ou trânsito).'}</div>
+          <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum modelo vindo agora (em fabricação, trânsito ou revisão).'}</div>
         ) : (
           <>
             <div className="pp-summary">
-              <strong>{pipelineShown.length} modelo{pipelineShown.length !== 1 ? 's' : ''}</strong> vindo ·{' '}
-              {nf(pipelineShown.reduce((a, p) => a + p.total, 0))} peças
+              <span><strong>{pipelineConf.length} modelo{pipelineConf.length !== 1 ? 's' : ''} confirmado{pipelineConf.length !== 1 ? 's' : ''}</strong> ·{' '}
+              {nf(pipelineConf.reduce((a, p) => a + p.total, 0))} peças</span>
               {pipelineShown.length !== pipeline.length && <> (de {nf(pipelinePieces)} no total)</>}
+              {pipelineReviewPieces > 0 && (
+                <span className="pp-plus-rv">+ {nf(pipelineReviewPieces)} peças em revisão ({pipelineReviewOrders} pedido{pipelineReviewOrders !== 1 ? 's' : ''}) · ainda não confirmadas</span>
+              )}
               <span className="pp-legend">
                 <i className="pp-dot st-in_transit" /> em trânsito
                 <i className="pp-dot st-manufacturing" /> em fabricação
-                <i className="pp-dot st-sent" /> em revisão
+                <i className="pp-dot st-sent rv" /> em revisão (à parte)
               </span>
             </div>
             <div className="pp-list">
-              {pipelineShown.map(p => (
+              {pipelineConf.map(p => (
                 <PipelineCard
                   key={p.product.id}
                   item={p}
@@ -295,18 +319,38 @@ export default function ProducaoPage({
                 />
               ))}
             </div>
+            {pipelineRev.length > 0 && (
+              <>
+                <h3 className="pp-section rv">
+                  Só em revisão
+                  <span>{pipelineRev.length} modelo{pipelineRev.length !== 1 ? 's' : ''} · {nf(pipelineRev.reduce((a, p) => a + p.review, 0))} peças · pedido ainda sendo avaliado, pode mudar ou não vir</span>
+                </h3>
+                <div className="pp-list">
+                  {pipelineRev.map(p => (
+                    <PipelineCard
+                      key={p.product.id}
+                      item={p}
+                      store={hasStore && !p.product._manual ? storeSignalForProduct(p.product, storeIndex, allProducts) : null}
+                      onPhoto={setLb}
+                      onOpenOrder={onOpenOrder}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </>
         )
       ) : tab === 'production' ? (
-        byFactory.length === 0 ? (
-          <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum pedido em produção agora.'}</div>
+        <>
+        {byFactory.length === 0 ? (
+          <div className="pd-empty">{search || factoryFilter ? 'Nada encontrado com esse filtro.' : 'Nenhum pedido em fabricação agora.'}</div>
         ) : byFactory.map(f => (
           <section key={f.name} className="pd-factory">
             <header className="pd-factory-head">
               <h3>{f.name}</h3>
               <span className="pd-factory-meta">
                 {nf(f.pieces)} peças · {f.groups.length} modelo{f.groups.length !== 1 ? 's' : ''}
-                {f.review > 0 && <> · {nf(f.review)} em revisão</>}
+                {f.review > 0 && <span className="pp-plus-rv"> · + {nf(f.review)} em revisão</span>}
                 {f.eta && <> · próxima chegada {f.eta.etaEstimated ? '~' : ''}{f.eta.etaDays} dias</>}
               </span>
               {f.risk > 0 && <span className="pd-pill bad">{f.risk} vão faltar na loja</span>}
@@ -324,7 +368,29 @@ export default function ProducaoPage({
               ))}
             </div>
           </section>
-        ))
+        ))}
+        {reviewOnlyGroups.length > 0 && (
+          <section className="pd-factory">
+            <h3 className="pp-section rv">
+              Só em revisão
+              <span>{reviewOnlyGroups.length} modelo{reviewOnlyGroups.length !== 1 ? 's' : ''} · {nf(reviewOnlyGroups.reduce((a, g) => a + g.reviewQty, 0))} peças · ainda não confirmados</span>
+            </h3>
+            <div className="pd-grid">
+              {reviewOnlyGroups.map(g => (
+                <ModelCard
+                  key={g.key}
+                  group={g}
+                  showFactory
+                  coverageDays={storeIndex.coverageDays}
+                  onPhoto={setLb}
+                  onOpenOrder={onOpenOrder}
+                  onOpen={() => setPanoramaId(g.product.id)}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+        </>
       ) : (
         transitShown.length === 0 ? (
           <div className="pd-empty">Nenhum pedido em trânsito.</div>
@@ -363,9 +429,29 @@ function PipelineCard({ item: p, store, onPhoto, onOpenOrder }) {
     : o.etaDays == null ? 'sem previsão'
     : o.etaDays < 0 ? `previsão venceu há ${-o.etaDays} dias`
     : `chega em ${o.etaEstimated ? '~' : ''}${o.etaDays} dias`
-  const cols = `minmax(120px, 1.3fr) repeat(${p.orders.length}, minmax(96px, 1fr)) 72px`
+  // v13.88 — confirmados (fabricação/trânsito) e EM REVISÃO em blocos separados
+  const conf = p.orders
+  const rev = p.reviewOrders || []
+  const hasConf = conf.length > 0
+  const hasRev = rev.length > 0
+  const colsList = ['minmax(120px, 1.3fr)']
+  if (hasConf) colsList.push(`repeat(${conf.length}, minmax(96px, 1fr))`, '72px')
+  if (hasRev) colsList.push(`repeat(${rev.length}, minmax(96px, 1fr))`, '78px')
+  const cols = colsList.join(' ')
+  const confSpan = hasConf ? conf.length + 1 : 0
+  const nCols = (hasConf ? conf.length + 1 : 0) + (hasRev ? rev.length + 1 : 0)
+  const orderHead = (o) => (
+    <button key={o.id} type="button" className={`pp-order st-${o.status}${o.isLate ? ' late' : ''}`}
+      onClick={() => onOpenOrder && onOpenOrder(o.id)} title={`Abrir o pedido ${o.name}`}>
+      <strong>{o.name}</strong>
+      <em>{o.factory} · {etaText(o)}</em>
+    </button>
+  )
+  const cell = (c, o, rv) => (
+    <span key={o.id} className={`num${rv ? ' pp-rv' : ''}${c.byOrder[o.id] ? '' : ' pp-none'}`}>{c.byOrder[o.id] ? nf(c.byOrder[o.id]) : '—'}</span>
+  )
   return (
-    <article className="pp-card">
+    <article className={`pp-card${p.onlyReview ? ' only-rv' : ''}`}>
       <header className="pp-head">
         <button type="button" className="pd-photo" onClick={() => photo && onPhoto(photo)} aria-label={photo ? 'Ampliar foto' : undefined}>
           {photo ? <img src={photo} alt="" loading="lazy" /> : <span>{(p.product.name || '?').slice(0, 1)}</span>}
@@ -377,9 +463,14 @@ function PipelineCard({ item: p, store, onPhoto, onOpenOrder }) {
             {p.product.factory_code && !p.product._manual && <> · <span className="pp-code">{p.product.factory_code}</span></>}
           </span>
           <div className="pp-stages">
-            {['in_transit', 'manufacturing', 'sent'].filter(s => p.byStatus[s] > 0).map(s => (
+            {['in_transit', 'manufacturing'].filter(s => p.byStatus[s] > 0).map(s => (
               <span key={s} className={`pp-stage st-${s}`}>{nf(p.byStatus[s])} {PIPELINE_STATUS[s].label}</span>
             ))}
+            {p.review > 0 && (
+              <span className="pp-stage st-sent rv" title="Pedido ainda sendo avaliado — não está confirmado e não entra no total">
+                {nf(p.review)} em revisão · não confirmado
+              </span>
+            )}
           </div>
           {store && (
             <span className="pp-store">
@@ -388,24 +479,35 @@ function PipelineCard({ item: p, store, onPhoto, onOpenOrder }) {
             </span>
           )}
         </div>
-        <div className="pd-card-qty">
-          <strong>{nf(p.total)}</strong>
-          <span>peças vindo</span>
-        </div>
+        {p.onlyReview ? (
+          <div className="pd-card-qty rv">
+            <strong>{nf(p.review)}</strong>
+            <span>em revisão</span>
+          </div>
+        ) : (
+          <div className="pd-card-qty">
+            <strong>{nf(p.total)}</strong>
+            <span>confirmadas</span>
+            {p.review > 0 && <span className="pp-plus-rv">+ {nf(p.review)} em revisão</span>}
+          </div>
+        )}
       </header>
 
       <div className="pp-table-wrap">
-        <div className="pp-table" role="table" style={{ minWidth: 220 + p.orders.length * 110 }}>
+        <div className="pp-table" role="table" style={{ minWidth: 220 + nCols * 100 }}>
+          {hasConf && hasRev && (
+            <div className="pp-row pp-row-group" role="row" style={{ gridTemplateColumns: cols }}>
+              <span />
+              <span className="pp-group" style={{ gridColumn: `2 / span ${confSpan}` }}>Confirmado</span>
+              <span className="pp-group rv" style={{ gridColumn: `${2 + confSpan} / span ${rev.length + 1}` }}>Em revisão · ainda não confirmado</span>
+            </div>
+          )}
           <div className="pp-row pp-row-head" role="row" style={{ gridTemplateColumns: cols }}>
             <span>Cor</span>
-            {p.orders.map(o => (
-              <button key={o.id} type="button" className={`pp-order st-${o.status}${o.isLate ? ' late' : ''}`}
-                onClick={() => onOpenOrder && onOpenOrder(o.id)} title={`Abrir o pedido ${o.name}`}>
-                <strong>{o.name}</strong>
-                <em>{PIPELINE_STATUS[o.status].label} · {etaText(o)}</em>
-              </button>
-            ))}
-            <span className="num">Total</span>
+            {conf.map(orderHead)}
+            {hasConf && <span className="num">Total</span>}
+            {rev.map(orderHead)}
+            {hasRev && <span className="num pp-rv-head">{hasConf ? '+ revisão' : 'Em revisão'}</span>}
           </div>
           {p.colors.map(c => (
             <div key={c.code} className="pp-row" role="row" style={{ gridTemplateColumns: cols }}>
@@ -415,17 +517,19 @@ function PipelineCard({ item: p, store, onPhoto, onOpenOrder }) {
                 </span>
                 <Code code={c.code} />
               </span>
-              {p.orders.map(o => (
-                <span key={o.id} className={`num${c.byOrder[o.id] ? '' : ' pp-none'}`}>{c.byOrder[o.id] ? nf(c.byOrder[o.id]) : '—'}</span>
-              ))}
-              <span className="num strong">{nf(c.total)}</span>
+              {conf.map(o => cell(c, o, false))}
+              {hasConf && <span className={`num strong${c.total ? '' : ' pp-none'}`}>{c.total ? nf(c.total) : '—'}</span>}
+              {rev.map(o => cell(c, o, true))}
+              {hasRev && <span className={`num strong pp-rv${c.review ? '' : ' pp-none'}`}>{c.review ? nf(c.review) : '—'}</span>}
             </div>
           ))}
           {p.colors.length > 1 && (
             <div className="pp-row pp-row-total" role="row" style={{ gridTemplateColumns: cols }}>
               <span>Total</span>
-              {p.orders.map(o => <span key={o.id} className="num">{nf(o.qty)}</span>)}
-              <span className="num strong">{nf(p.total)}</span>
+              {conf.map(o => <span key={o.id} className="num">{nf(o.qty)}</span>)}
+              {hasConf && <span className="num strong">{nf(p.total)}</span>}
+              {rev.map(o => <span key={o.id} className="num pp-rv">{nf(o.qty)}</span>)}
+              {hasRev && <span className="num strong pp-rv">{nf(p.review)}</span>}
             </div>
           )}
         </div>
@@ -437,14 +541,15 @@ function PipelineCard({ item: p, store, onPhoto, onOpenOrder }) {
 // ═════════════════════════════════════════════════════════════
 // Card de um modelo em produção numa fábrica
 // ═════════════════════════════════════════════════════════════
-function ModelCard({ group: g, coverageDays, onPhoto, onOpenOrder, onOpen }) {
+function ModelCard({ group: g, coverageDays, onPhoto, onOpenOrder, onOpen, showFactory = false }) {
   const photo = g.product.card_image_url || (g.product.photos || [])[0]
   const otherFactory = g.registeredFactory && g.registeredFactory !== g.factoryName
+  const onlyRv = !(g.confirmedQty > 0) && g.reviewQty > 0
   const o = g.outlook
   const risk = o?.gapDays > 0
 
   return (
-    <article className={`pd-card${risk ? ' risk' : ''}`} onClick={onOpen} role="button" tabIndex={0}
+    <article className={`pd-card${risk ? ' risk' : ''}${onlyRv ? ' only-rv' : ''}`} onClick={onOpen} role="button" tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }} title="Ver o panorama completo do modelo">
       <div className="pd-card-top">
         <button
@@ -457,13 +562,14 @@ function ModelCard({ group: g, coverageDays, onPhoto, onOpenOrder, onOpen }) {
         </button>
         <div className="pd-card-title">
           <h4>{UC(g.product.name || 'Sem nome')}</h4>
+          {showFactory && <span className="pd-card-sub">{g.factoryName}</span>}
           {otherFactory && <span className="pd-card-sub">modelo cadastrado na {g.registeredFactory}</span>}
           <div className="pd-orders">
             {g.orders.map(ord => (
               <button
                 key={ord.id}
                 type="button"
-                className={`pd-order${ord.isLate ? ' late' : ''}`}
+                className={`pd-order${ord.isLate ? ' late' : ''}${ord.status === 'sent' ? ' rv' : ''}`}
                 onClick={(e) => { e.stopPropagation(); onOpenOrder && onOpenOrder(ord.id) }}
                 title="Abrir o pedido"
               >
@@ -477,10 +583,18 @@ function ModelCard({ group: g, coverageDays, onPhoto, onOpenOrder, onOpen }) {
             ))}
           </div>
         </div>
-        <div className="pd-card-qty">
-          <strong>{nf(g.totalQty)}</strong>
-          <span>peças</span>
-        </div>
+        {onlyRv ? (
+          <div className="pd-card-qty rv">
+            <strong>{nf(g.reviewQty)}</strong>
+            <span>em revisão</span>
+          </div>
+        ) : (
+          <div className="pd-card-qty">
+            <strong>{nf(g.confirmedQty)}</strong>
+            <span>peças</span>
+            {g.reviewQty > 0 && <span className="pp-plus-rv">+ {nf(g.reviewQty)} em revisão</span>}
+          </div>
+        )}
       </div>
 
       <div className="pd-colors">
@@ -496,7 +610,14 @@ function ModelCard({ group: g, coverageDays, onPhoto, onOpenOrder, onOpen }) {
               {c.colorData?.photo_url && <img src={c.colorData.photo_url} alt="" loading="lazy" />}
             </span>
             <span className="pd-color-code"><Code code={c.code} /></span>
-            <span className="pd-color-qty">{c.hasOrder ? nf(c.qty) : 'sem pedido'}</span>
+            <span className="pd-color-qty">
+              {!c.hasOrder ? 'sem pedido'
+                : onlyRv ? <span className="pp-rv-text">{nf(c.qtyReview)}</span>
+                : <>
+                    {c.qty - c.qtyReview > 0 ? nf(c.qty - c.qtyReview) : ''}
+                    {c.qtyReview > 0 && <em className="pp-rv-text pd-rv-small"> +{nf(c.qtyReview)} rev.</em>}
+                  </>}
+            </span>
           </div>
         ))}
       </div>

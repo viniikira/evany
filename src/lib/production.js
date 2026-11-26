@@ -78,6 +78,9 @@ function productOf(item, order, productsById) {
 // fabricação e em trânsito), em qualquer fábrica/pedido, com a quantidade
 // por cor em cada pedido.
 // ═══════════════════════════════════════════════════════════════════
+// v13.88 — "em revisão" NÃO é produção: o pedido ainda está sendo avaliado.
+// Continua aparecendo (é o que PODE chegar), mas sempre SEPARADO: fora do
+// total confirmado, da chegada prevista e do risco de faltar na loja.
 export const PIPELINE_STATUS = {
   sent: { label: 'em revisão', rank: 2 },
   manufacturing: { label: 'em fabricação', rank: 1 },
@@ -138,16 +141,27 @@ export function buildProductPipeline({ products = [], orders = [], colors = [], 
   return [...map.values()].map(p => {
     const ords = [...p.orders.values()].sort((a, b) =>
       PIPELINE_STATUS[a.status].rank - PIPELINE_STATUS[b.status].rank || (a.etaDays ?? 1e9) - (b.etaDays ?? 1e9))
+    const confirmed = ords.filter(o => o.status !== 'sent')
+    const reviewOrders = ords.filter(o => o.status === 'sent')
+    const review = p.byStatus.sent
+    const sumOf = (byOrder, list) => list.reduce((a, o) => a + (byOrder[o.id] || 0), 0)
     return {
       product: p.product,
-      total: p.total,
+      // total = só o CONFIRMADO (fabricação + trânsito); revisão vem à parte
+      total: p.total - review,
+      review,
+      totalWithReview: p.total,
+      onlyReview: confirmed.length === 0,
       byStatus: p.byStatus,
       factories: [...new Set(ords.map(o => o.factory))],
-      orders: ords,
-      colors: [...p.colors.values()].sort((a, b) => b.total - a.total || a.code.localeCompare(b.code)),
-      nextEta: soonestEta(ords),
+      orders: confirmed,
+      reviewOrders,
+      colors: [...p.colors.values()]
+        .map(c => ({ ...c, total: sumOf(c.byOrder, confirmed), review: sumOf(c.byOrder, reviewOrders) }))
+        .sort((a, b) => b.total - a.total || b.review - a.review || a.code.localeCompare(b.code)),
+      nextEta: soonestEta(confirmed),
     }
-  }).sort((a, b) => b.total - a.total || (a.product.name || '').localeCompare(b.product.name || ''))
+  }).sort((a, b) => b.total - a.total || b.review - a.review || (a.product.name || '').localeCompare(b.product.name || ''))
 }
 
 export function buildProductionView({ products = [], orders = [], colors = [], now = Date.now() } = {}) {
@@ -263,6 +277,8 @@ export function buildProductionView({ products = [], orders = [], colors = [], n
       orders: [...g.orderMap.values()],
       totalQty: cores.reduce((s, c) => s + c.qty, 0),
       reviewQty: cores.reduce((s, c) => s + c.qtyReview, 0),
+      // v13.88 — confirmado = fabricação (revisão fica à parte)
+      confirmedQty: cores.reduce((s, c) => s + c.qty - c.qtyReview, 0),
       // O cadastro diz outra fábrica? (ex.: modelo da HAIRCHUAN feito na HAIR FORTUNE)
       registeredFactory: g.product._manual ? null : (g.product.factory || null),
     }

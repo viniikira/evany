@@ -200,4 +200,29 @@ describe('buildProductPipeline — um cartão por modelo', () => {
     expect(b.map(x => x.product.name)).toEqual(['ANA LACE'])
     expect(b[0].byStatus.sent).toBe(25)
   })
+  it('em revisão fica SEPARADO: fora do total confirmado e da chegada (v13.88)', () => {
+    const withReview = [...ords, {
+      id: 'r', order_name: 'DEZ/26 · EPF', factory: 'EPF', status: 'sent', expected_arrival: '2026-09-20',
+      items: [{ product_id: 'val', colors: [{ code: '1B', qty: 80 }, { code: '613', qty: 40 }] }],
+    }, {
+      id: 's', order_name: 'Só revisão', factory: 'EPF', status: 'sent',
+      items: [{ name_manual: 'IDEIA NOVA', colors: [{ code: '2', qty: 10 }] }],
+    }]
+    const v = buildProductPipeline({ products: prods, orders: withReview, now: NOW })
+    const val = v.find(x => x.product.name === 'VALENTINA')
+    expect(val.total).toBe(400)              // confirmado não muda
+    expect(val.review).toBe(120)
+    expect(val.totalWithReview).toBe(520)
+    expect(val.orders.map(o => o.id)).toEqual(['b', 'a'])
+    expect(val.reviewOrders.map(o => o.id)).toEqual(['r'])
+    expect(val.nextEta.orderName).toBe('NOVEMBRO 2025')   // revisão não vira "chegada"
+    const black = val.colors.find(c => c.code === '1B')
+    expect([black.total, black.review]).toEqual([300, 80])
+    const blonde = val.colors.find(c => c.code === '613')
+    expect([blonde.total, blonde.review]).toEqual([0, 40])
+    const idea = v.find(x => x.product.name === 'IDEIA NOVA')
+    expect(idea.onlyReview).toBe(true)
+    expect(idea.total).toBe(0)
+    expect(v[v.length - 1]).toBe(idea)      // só-revisão vai pro fim
+  })
 })
